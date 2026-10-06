@@ -1,0 +1,72 @@
+{
+  "expo": {
+    "name": "Yatma",
+    "slug": "yatma",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "yatma",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F766E"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.yatma.app",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Yatma uses the microphone for voice capture and dictation.",
+        "UIApplicationShortcutItems": [
+          {
+            "UIApplicationShortcutItemType": "com.yatma.app.dictate",
+            "UIApplicationShortcutItemTitle": "Dictate",
+            "UIApplicationShortcutItemSubtitle": "Capture by voice",
+            "UIApplicationShortcutItemIconType": "UIApplicationShortcutIconTypeCompose",
+            "UIApplicationShortcutItemUserInfo": {
+              "url": "yatma://capture"
+            }
+          }
+        ]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F766E"
+      },
+      "package": "com.yatma.app",
+      "permissions": ["RECORD_AUDIO"]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-apple-authentication",
+      "expo-sqlite",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0F766E",
+          "image": "./assets/splash-icon.png"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "yatma-placeholder"
+      }
+    }
+  }
+}
