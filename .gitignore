@@ -1,0 +1,11 @@
+node_modules
+.pnpm-store
+dist
+.expo
+.env
+.alchemy
+*.local
+ios/Pods
+android/.gradle
+.turbo
+coverage
