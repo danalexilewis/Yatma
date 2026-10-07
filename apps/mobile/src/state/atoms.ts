@@ -10,6 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { Platform } from "react-native";
 
 import { appendEventAndUpsert, hydrateLocalState, openDatabase } from "../db/database";
 import { lastSeenAtFromEvents } from "../db/entities";
@@ -92,7 +93,7 @@ type DepsHolder = { deps: WriteDeps };
 async function seedDevSample(holder: DepsHolder): Promise<void> {
   const projectId = await writeCreateProject(holder.deps, {
     title: "Sample project",
-    color: "#0F766E",
+    color: "#1F6B4A",
   });
   await writeCreateTask(holder.deps, { title: "Welcome to Yatma", projectId });
   await writeCreateTask(holder.deps, {
@@ -121,47 +122,84 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     async function hydrate() {
-      await openDatabase();
-      let hydrated = await hydrateLocalState();
-      if (cancelled) return;
-
-      if (
-        typeof __DEV__ !== "undefined" &&
-        __DEV__ &&
-        hydrated.folded.events.length === 0
-      ) {
-        const holder: DepsHolder = {
-          deps: {
-            deviceId: hydrated.deviceId,
-            lastSeenAt: hydrated.lastSeenAt,
-            folded: hydrated.folded,
-            dispatch: async () => undefined,
-          },
-        };
-        holder.deps = {
-          ...holder.deps,
-          dispatch: async (event) => {
-            const next = await appendEventAndUpsert(event, stateRef.current.folded);
-            stateRef.current = {
-              ...stateRef.current,
-              folded: next,
-              lastSeenAt: lastSeenAtFromEvents(next.events),
-            };
-            advanceDeps(holder, event);
-          },
-        };
-        await seedDevSample(holder);
+      try {
+        await openDatabase();
+        let hydrated = await hydrateLocalState();
         if (cancelled) return;
-        hydrated = await hydrateLocalState();
-      }
 
-      if (cancelled) return;
-      dispatch({
-        type: "hydrated",
-        folded: hydrated.folded,
-        deviceId: hydrated.deviceId,
-        lastSeenAt: hydrated.lastSeenAt,
-      });
+        if (
+          typeof __DEV__ !== "undefined" &&
+          __DEV__ &&
+          hydrated.folded.events.length === 0
+        ) {
+          const holder: DepsHolder = {
+            deps: {
+              deviceId: hydrated.deviceId,
+              lastSeenAt: hydrated.lastSeenAt,
+              folded: hydrated.folded,
+              dispatch: async () => undefined,
+            },
+          };
+          holder.deps = {
+            ...holder.deps,
+            dispatch: async (event) => {
+              try {
+                const next = await appendEventAndUpsert(event, holder.deps.folded);
+                stateRef.current = {
+                  ...stateRef.current,
+                  folded: next,
+                  lastSeenAt: lastSeenAtFromEvents(next.events),
+                };
+                advanceDeps(holder, event);
+              } catch {
+                // Web OPFS can fail; keep the seed in memory so UI previews still work.
+                const next = foldEvents([...holder.deps.folded.events, event]);
+                stateRef.current = {
+                  ...stateRef.current,
+                  folded: next,
+                  lastSeenAt: lastSeenAtFromEvents(next.events),
+                };
+                holder.deps = {
+                  ...holder.deps,
+                  folded: next,
+                  lastSeenAt: lastSeenAtFromEvents(next.events),
+                };
+              }
+            },
+          };
+          try {
+            await seedDevSample(holder);
+            if (cancelled) return;
+            if (Platform.OS !== "web") {
+              hydrated = await hydrateLocalState();
+            } else {
+              hydrated = {
+                ...hydrated,
+                folded: holder.deps.folded,
+                lastSeenAt: holder.deps.lastSeenAt,
+              };
+            }
+          } catch {
+            // Seed is best-effort in __DEV__.
+          }
+        }
+
+        if (cancelled) return;
+        dispatch({
+          type: "hydrated",
+          folded: hydrated.folded,
+          deviceId: hydrated.deviceId,
+          lastSeenAt: hydrated.lastSeenAt,
+        });
+      } catch {
+        if (cancelled) return;
+        dispatch({
+          type: "hydrated",
+          folded: emptyFolded(),
+          deviceId: "device_web",
+          lastSeenAt: null,
+        });
+      }
       setBootstrapped(true);
     }
     void hydrate();
@@ -171,14 +209,26 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
   }, []);
 
   async function dispatchLocalEvent(event: Event): Promise<void> {
-    const next = await appendEventAndUpsert(event, stateRef.current.folded);
-    stateRef.current = {
-      ...stateRef.current,
-      folded: next,
-      lastSeenAt: lastSeenAtFromEvents(next.events),
-      ready: true,
-    };
-    dispatch({ type: "replaceFolded", folded: next });
+    try {
+      const next = await appendEventAndUpsert(event, stateRef.current.folded);
+      stateRef.current = {
+        ...stateRef.current,
+        folded: next,
+        lastSeenAt: lastSeenAtFromEvents(next.events),
+        ready: true,
+      };
+      dispatch({ type: "replaceFolded", folded: next });
+    } catch {
+      // Persist failed (common on Expo web / OPFS). Apply the event in memory.
+      const next = foldEvents([...stateRef.current.folded.events, event]);
+      stateRef.current = {
+        ...stateRef.current,
+        folded: next,
+        lastSeenAt: lastSeenAtFromEvents(next.events),
+        ready: true,
+      };
+      dispatch({ type: "replaceFolded", folded: next });
+    }
   }
 
   function writeDeps(): WriteDeps {

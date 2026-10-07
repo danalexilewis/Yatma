@@ -40,7 +40,8 @@ export default function ProjectLayout() {
 
   function onSegment(key: string) {
     if (!id || key === active) return;
-    router.replace(`/project/${id}/${key}`);
+    const href = `/project/${id}/${key}` as `/project/${string}/tasks`;
+    router.replace(href);
   }
 
   return (

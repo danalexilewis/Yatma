@@ -3,7 +3,7 @@ import { TaskId as TaskIdSchema } from "@yatma/core";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
   interpolate,
@@ -294,11 +294,15 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 20,
     paddingVertical: 28,
-    shadowColor: "#14221E",
-    shadowOpacity: 0.08,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 3,
+    ...(Platform.OS === "web"
+      ? ({ boxShadow: "0 8px 16px rgba(20, 34, 30, 0.08)" } as object)
+      : {
+          shadowColor: "#14221E",
+          shadowOpacity: 0.08,
+          shadowRadius: 16,
+          shadowOffset: { width: 0, height: 8 },
+          elevation: 3,
+        }),
   },
   throwPress: {
     minHeight: 88,

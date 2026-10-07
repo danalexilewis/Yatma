@@ -23,6 +23,7 @@ export function Screen(props: ScreenProps) {
   const paddingBottom =
     (edges.includes("bottom") ? insets.bottom : 0) + (props.composerClearance ?? 0);
 
+  // Cast: react-native-web ViewStyle adds web-only position values that conflict with RN types.
   const containerStyle = [
     styles.flex,
     {
@@ -31,14 +32,14 @@ export function Screen(props: ScreenProps) {
       paddingBottom,
     },
     props.style,
-  ];
+  ] as never;
 
   if (props.scroll) {
     return (
       <View style={containerStyle}>
         <ScrollView
           style={styles.flex}
-          contentContainerStyle={[styles.scrollContent, props.contentStyle]}
+          contentContainerStyle={[styles.scrollContent, props.contentStyle] as never}
           keyboardShouldPersistTaps="handled"
         >
           {props.children}
@@ -47,7 +48,7 @@ export function Screen(props: ScreenProps) {
     );
   }
 
-  return <View style={[containerStyle, props.contentStyle]}>{props.children}</View>;
+  return <View style={[containerStyle, props.contentStyle] as never}>{props.children}</View>;
 }
 
 const styles = StyleSheet.create({
