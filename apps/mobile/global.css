@@ -2,12 +2,12 @@
 @import "uniwind";
 
 @theme {
-  --color-brand: #0f766e;
-  --color-brand-muted: #134e4a;
-  --color-ink: #0f172a;
-  --color-paper: #f8fafc;
-  --color-do: #dc2626;
-  --color-schedule: #2563eb;
-  --color-delegate: #ca8a04;
-  --color-eliminate: #64748b;
+  --color-brand: #1f6b4a;
+  --color-brand-muted: #164f37;
+  --color-ink: #14221e;
+  --color-paper: #eef2f1;
+  --color-do: #c2413a;
+  --color-schedule: #2a5db0;
+  --color-delegate: #a16207;
+  --color-eliminate: #5c6b66;
 }

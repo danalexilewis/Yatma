@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0F766E"
+      "backgroundColor": "#1F6B4A"
     },
     "ios": {
       "supportsTablet": false,
@@ -35,7 +35,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0F766E"
+        "backgroundColor": "#1F6B4A"
       },
       "package": "com.yatma.app",
       "permissions": ["RECORD_AUDIO"]
@@ -52,7 +52,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#0F766E",
+          "backgroundColor": "#1F6B4A",
           "image": "./assets/splash-icon.png"
         }
       ]

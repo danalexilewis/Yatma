@@ -2,9 +2,11 @@ import type { Quadrant, Task } from "@yatma/core";
 import { TaskId as TaskIdSchema } from "@yatma/core";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
+  interpolate,
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
@@ -13,98 +15,136 @@ import Animated, {
 
 import { useAppStore, useFoldedState } from "../../state/atoms";
 import { selectInboxTasks, selectQuadrantTasks } from "../../state/selectors";
-import { colors } from "../../theme/colors";
+import { useTheme, type Theme } from "../../theme/theme";
+import { EmptyState, Row, Screen, ScreenHeader } from "../../ui";
 
 const QUADRANTS: ReadonlyArray<{
   readonly key: Quadrant;
   readonly label: string;
-  readonly color: string;
 }> = [
-  { key: "do", label: "Do", color: colors.do },
-  { key: "schedule", label: "Schedule", color: colors.schedule },
-  { key: "delegate", label: "Delegate", color: colors.delegate },
-  { key: "eliminate", label: "Eliminate", color: colors.eliminate },
+  { key: "do", label: "Do" },
+  { key: "schedule", label: "Schedule" },
+  { key: "delegate", label: "Delegate" },
+  { key: "eliminate", label: "Eliminate" },
 ];
 
 const SWIPE_THRESHOLD = 64;
 
-/** 2×2 Eisenhower matrix plus swipeable Inbox tray. */
+/** Throw-card triage with edge labels and quadrant counts. */
 export function TriageScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const folded = useFoldedState();
   const { updateTask } = useAppStore();
   const inbox = selectInboxTasks(folded);
   const topInbox = inbox[0];
+  const [focused, setFocused] = useState<Quadrant | null>(null);
 
   async function triage(task: Task, quadrant: Quadrant) {
     await updateTask({ taskId: TaskIdSchema.make(task.id), quadrant });
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }
 
+  const focusedTasks = focused ? selectQuadrantTasks(folded, focused) : [];
+
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      <Text className="mb-3 text-2xl font-bold text-slate-900 dark:text-slate-50">Triage</Text>
+    <Screen>
+      <ScreenHeader
+        title="Triage"
+        subtitle={inbox.length > 0 ? `${inbox.length} in inbox` : "Inbox clear"}
+      />
 
-      <View className="mb-4 flex-row flex-wrap gap-2">
-        {QUADRANTS.map((quadrant) => {
-          const tasks = selectQuadrantTasks(folded, quadrant.key);
-          const top = tasks.slice(0, 2);
-          return (
-            <View
-              key={quadrant.key}
-              className="w-[48%] rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
-            >
-              <View className="mb-2 flex-row items-center justify-between">
-                <Text className="font-semibold" style={{ color: quadrant.color }}>
-                  {quadrant.label}
-                </Text>
-                <Text className="text-sm text-slate-500">{tasks.length}</Text>
-              </View>
-              {top.length === 0 ? (
-                <Text className="text-xs text-slate-400">Empty</Text>
-              ) : (
-                top.map((task) => (
-                  <Pressable key={task.id} onPress={() => router.push(`/task/${task.id}`)}>
-                    <Text
-                      className="mb-1 text-sm text-slate-800 dark:text-slate-100"
-                      numberOfLines={1}
-                    >
-                      {task.title}
-                    </Text>
-                  </Pressable>
-                ))
-              )}
-            </View>
-          );
-        })}
-      </View>
-
-      <View className="mb-8 rounded-2xl border border-dashed border-slate-300 bg-white p-4 dark:border-slate-600 dark:bg-slate-900">
-        <Text className="mb-1 text-sm font-semibold text-slate-700 dark:text-slate-200">
-          Inbox tray · {inbox.length}
-        </Text>
-        <Text className="mb-3 text-xs text-slate-500">
-          Swipe up Do · right Schedule · left Delegate · down Eliminate
-        </Text>
+      <View style={styles.throwArea}>
         {topInbox ? (
           <InboxSwipeCard
             task={topInbox}
+            theme={theme}
             onOpen={() => router.push(`/task/${topInbox.id}`)}
             onTriage={(quadrant) => void triage(topInbox, quadrant)}
           />
         ) : (
-          <Text className="text-sm text-slate-500">Inbox is clear.</Text>
+          <EmptyState message="Inbox is clear. Capture something new from Now." />
         )}
       </View>
-    </ScrollView>
+
+      <View
+        style={[
+          styles.counts,
+          {
+            borderTopColor: theme.colors.line,
+            paddingHorizontal: theme.space.screenX,
+          },
+        ]}
+      >
+        {QUADRANTS.map((quadrant) => {
+          const count = selectQuadrantTasks(folded, quadrant.key).length;
+          const active = focused === quadrant.key;
+          const color =
+            quadrant.key === "do"
+              ? theme.colors.do
+              : quadrant.key === "schedule"
+                ? theme.colors.schedule
+                : quadrant.key === "delegate"
+                  ? theme.colors.delegate
+                  : theme.colors.eliminate;
+          return (
+            <Pressable
+              key={quadrant.key}
+              onPress={() => setFocused((current) => (current === quadrant.key ? null : quadrant.key))}
+              style={[
+                styles.countCell,
+                {
+                  backgroundColor: active ? `${color}18` : "transparent",
+                  borderColor: theme.colors.line,
+                },
+              ]}
+            >
+              <Text style={{ color, fontWeight: "700", fontSize: 20 }}>{count}</Text>
+              <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 2 }}>
+                {quadrant.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {focused ? (
+        <ScrollView style={styles.focusedList}>
+          {focusedTasks.length === 0 ? (
+            <Text
+              style={{
+                color: theme.colors.muted,
+                textAlign: "center",
+                padding: 24,
+                fontSize: theme.type.meta,
+              }}
+            >
+              No tasks in {focused}.
+            </Text>
+          ) : (
+            focusedTasks.map((task, index) => (
+              <Row
+                key={task.id}
+                title={task.title}
+                subtitle={task.status.replace("_", " ")}
+                last={index === focusedTasks.length - 1}
+                onPress={() => router.push(`/task/${task.id}`)}
+              />
+            ))
+          )}
+        </ScrollView>
+      ) : null}
+    </Screen>
   );
 }
 
 function InboxSwipeCard(props: {
   readonly task: Task;
+  readonly theme: Theme;
   readonly onOpen: () => void;
   readonly onTriage: (quadrant: Quadrant) => void;
 }) {
+  const { theme } = props;
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
 
@@ -135,32 +175,160 @@ function InboxSwipeCard(props: {
       runOnJS(settle)(event.translationX > 0 ? "schedule" : "delegate");
     });
 
-  const animatedStyle = useAnimatedStyle(() => ({
+  const cardStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }, { translateY: translateY.value }],
   }));
 
+  const scheduleStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateX.value, [0, SWIPE_THRESHOLD], [0.35, 1], "clamp"),
+  }));
+  const doStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(-translateY.value, [0, SWIPE_THRESHOLD], [0.35, 1], "clamp"),
+  }));
+  const delegateStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(-translateX.value, [0, SWIPE_THRESHOLD], [0.35, 1], "clamp"),
+  }));
+  const eliminateStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(translateY.value, [0, SWIPE_THRESHOLD], [0.35, 1], "clamp"),
+  }));
+
   return (
-    <GestureDetector gesture={pan}>
-      <Animated.View
+    <View style={styles.cardStage}>
+      <Animated.Text
         style={[
-          animatedStyle,
-          {
-            backgroundColor: `${colors.inbox}14`,
-            borderRadius: 12,
-            paddingHorizontal: 12,
-            paddingVertical: 16,
-          },
+          styles.edgeLabel,
+          styles.edgeTop,
+          { color: theme.colors.do },
+          doStyle,
         ]}
       >
-        <Pressable onPress={props.onOpen}>
-          <Text className="text-base font-medium text-slate-900 dark:text-slate-50">
-            {props.task.title}
-          </Text>
-          <Text className="mt-2 text-xs text-slate-500">
-            ↑ Do · → Schedule · ← Delegate · ↓ Eliminate
-          </Text>
-        </Pressable>
-      </Animated.View>
-    </GestureDetector>
+        Do
+      </Animated.Text>
+      <Animated.Text
+        style={[
+          styles.edgeLabel,
+          styles.edgeRight,
+          { color: theme.colors.schedule },
+          scheduleStyle,
+        ]}
+      >
+        Schedule
+      </Animated.Text>
+      <Animated.Text
+        style={[
+          styles.edgeLabel,
+          styles.edgeLeft,
+          { color: theme.colors.delegate },
+          delegateStyle,
+        ]}
+      >
+        Delegate
+      </Animated.Text>
+      <Animated.Text
+        style={[
+          styles.edgeLabel,
+          styles.edgeBottom,
+          { color: theme.colors.eliminate },
+          eliminateStyle,
+        ]}
+      >
+        Eliminate
+      </Animated.Text>
+
+      <GestureDetector gesture={pan}>
+        <Animated.View
+          style={[
+            cardStyle,
+            styles.throwCard,
+            {
+              backgroundColor: theme.colors.surface,
+              borderColor: theme.colors.line,
+            },
+          ]}
+        >
+          <Pressable onPress={props.onOpen} style={styles.throwPress}>
+            <Text
+              style={{
+                color: theme.colors.ink,
+                fontSize: 20,
+                fontWeight: "600",
+                textAlign: "center",
+              }}
+            >
+              {props.task.title}
+            </Text>
+            <Text
+              style={{
+                color: theme.colors.muted,
+                fontSize: theme.type.meta,
+                marginTop: 12,
+                textAlign: "center",
+              }}
+            >
+              Drag toward a label
+            </Text>
+          </Pressable>
+        </Animated.View>
+      </GestureDetector>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  throwArea: {
+    flex: 1,
+    minHeight: 280,
+    justifyContent: "center",
+  },
+  cardStage: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 28,
+    paddingVertical: 40,
+  },
+  throwCard: {
+    width: "100%",
+    maxWidth: 320,
+    borderRadius: 18,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 20,
+    paddingVertical: 28,
+    shadowColor: "#14221E",
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 3,
+  },
+  throwPress: {
+    minHeight: 88,
+    justifyContent: "center",
+  },
+  edgeLabel: {
+    position: "absolute",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  edgeTop: { top: 12 },
+  edgeBottom: { bottom: 12 },
+  edgeLeft: { left: 12 },
+  edgeRight: { right: 12 },
+  counts: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: 12,
+    paddingBottom: 8,
+    gap: 8,
+  },
+  countCell: {
+    width: "47%",
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+  },
+  focusedList: {
+    maxHeight: 220,
+  },
+});

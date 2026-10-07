@@ -17,6 +17,7 @@
   "dependencies": {
     "@clerk/expo": "catalog:",
     "@effect/atom-react": "catalog:",
+    "@expo/vector-icons": "^15.1.1",
     "@legendapp/list": "catalog:",
     "@yatma/core": "workspace:*",
     "effect": "catalog:",
