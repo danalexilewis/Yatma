@@ -38,7 +38,9 @@
         "backgroundColor": "#0F766E"
       },
       "package": "com.yatma.app",
-      "permissions": ["RECORD_AUDIO"]
+      "permissions": [
+        "RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -55,7 +57,9 @@
           "backgroundColor": "#0F766E",
           "image": "./assets/splash-icon.png"
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

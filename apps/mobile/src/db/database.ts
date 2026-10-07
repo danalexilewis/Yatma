@@ -13,6 +13,7 @@ import type {
 import { encodeEvent, foldEvents, parseEventLine } from "@yatma/core";
 import type { SQLiteDatabase } from "expo-sqlite";
 import * as SQLite from "expo-sqlite";
+import { Platform } from "react-native";
 
 import {
   entityRowsFromFolded,
@@ -32,6 +33,33 @@ import {
 const DEVICE_ID_META_KEY = "deviceId";
 
 let databasePromise: Promise<SQLiteDatabase> | null = null;
+
+type SqlRunner = {
+  readonly runAsync: SQLiteDatabase["runAsync"];
+};
+
+function isWebRuntime(): boolean {
+  return (
+    Platform.OS === "web" ||
+    (typeof document !== "undefined" && typeof window !== "undefined")
+  );
+}
+
+/** Web SQLite lacks exclusive transactions; use the shared helper everywhere. */
+async function runInTransaction(
+  database: SQLiteDatabase,
+  task: (tx: SqlRunner) => Promise<void>,
+): Promise<void> {
+  if (isWebRuntime()) {
+    await database.withTransactionAsync(async () => {
+      await task(database);
+    });
+    return;
+  }
+  await database.withExclusiveTransactionAsync(async (tx) => {
+    await task(tx);
+  });
+}
 
 /** Open (or reuse) the local Yatma database and migrate schema. */
 export async function openDatabase(): Promise<SQLiteDatabase> {
@@ -93,7 +121,7 @@ export async function appendEvent(event: Event): Promise<void> {
 export async function upsertEntities(folded: FoldedEntities): Promise<void> {
   const database = await openDatabase();
   const rows = entityRowsFromFolded(folded);
-  await database.withExclusiveTransactionAsync(async (tx) => {
+  await runInTransaction(database, async (tx) => {
     for (const row of rows) {
       await tx.runAsync(
         `INSERT INTO entities (kind, id, payload, updated_at)
@@ -138,7 +166,7 @@ export async function appendEventAndUpsert(
 ): Promise<FoldedEntities> {
   const next = foldEvents([...previous.events, event]);
   const database = await openDatabase();
-  await database.withExclusiveTransactionAsync(async (tx) => {
+  await runInTransaction(database, async (tx) => {
     await tx.runAsync(
       `INSERT OR REPLACE INTO events (id, at, type, payload, seq, device_id, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -285,7 +313,7 @@ export async function assignEventSeq(eventId: string, seq: number): Promise<void
 /** Merge remote events (idempotent by id) and refresh entity cache. */
 export async function upsertRemoteEvents(events: readonly Event[]): Promise<FoldedEntities> {
   const database = await openDatabase();
-  await database.withExclusiveTransactionAsync(async (tx) => {
+  await runInTransaction(database, async (tx) => {
     for (const event of events) {
       await tx.runAsync(
         `INSERT INTO events (id, at, type, payload, seq, device_id, created_at)

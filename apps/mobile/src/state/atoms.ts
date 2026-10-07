@@ -121,48 +121,52 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     async function hydrate() {
-      await openDatabase();
-      let hydrated = await hydrateLocalState();
-      if (cancelled) return;
-
-      if (
-        typeof __DEV__ !== "undefined" &&
-        __DEV__ &&
-        hydrated.folded.events.length === 0
-      ) {
-        const holder: DepsHolder = {
-          deps: {
-            deviceId: hydrated.deviceId,
-            lastSeenAt: hydrated.lastSeenAt,
-            folded: hydrated.folded,
-            dispatch: async () => undefined,
-          },
-        };
-        holder.deps = {
-          ...holder.deps,
-          dispatch: async (event) => {
-            const next = await appendEventAndUpsert(event, stateRef.current.folded);
-            stateRef.current = {
-              ...stateRef.current,
-              folded: next,
-              lastSeenAt: lastSeenAtFromEvents(next.events),
-            };
-            advanceDeps(holder, event);
-          },
-        };
-        await seedDevSample(holder);
+      try {
+        await openDatabase();
+        let hydrated = await hydrateLocalState();
         if (cancelled) return;
-        hydrated = await hydrateLocalState();
-      }
 
-      if (cancelled) return;
-      dispatch({
-        type: "hydrated",
-        folded: hydrated.folded,
-        deviceId: hydrated.deviceId,
-        lastSeenAt: hydrated.lastSeenAt,
-      });
-      setBootstrapped(true);
+        if (
+          typeof __DEV__ !== "undefined" &&
+          __DEV__ &&
+          hydrated.folded.events.length === 0
+        ) {
+          const holder: DepsHolder = {
+            deps: {
+              deviceId: hydrated.deviceId,
+              lastSeenAt: hydrated.lastSeenAt,
+              folded: hydrated.folded,
+              dispatch: async () => undefined,
+            },
+          };
+          holder.deps = {
+            ...holder.deps,
+            dispatch: async (event) => {
+              const next = await appendEventAndUpsert(event, stateRef.current.folded);
+              stateRef.current = {
+                ...stateRef.current,
+                folded: next,
+                lastSeenAt: lastSeenAtFromEvents(next.events),
+              };
+              advanceDeps(holder, event);
+            },
+          };
+          await seedDevSample(holder);
+          if (cancelled) return;
+          hydrated = await hydrateLocalState();
+        }
+
+        if (cancelled) return;
+        dispatch({
+          type: "hydrated",
+          folded: hydrated.folded,
+          deviceId: hydrated.deviceId,
+          lastSeenAt: hydrated.lastSeenAt,
+        });
+        setBootstrapped(true);
+      } catch (error) {
+        console.error("Yatma hydrate failed", error);
+      }
     }
     void hydrate();
     return () => {

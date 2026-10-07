@@ -1,7 +1,5 @@
-@import "tailwindcss";
-@import "uniwind";
-
-@theme {
+/* Minimal web-safe theme. Uniwind/Tailwind full pipeline returns for native later. */
+:root {
   --color-brand: #0f766e;
   --color-brand-muted: #134e4a;
   --color-ink: #0f172a;
@@ -10,4 +8,11 @@
   --color-schedule: #2563eb;
   --color-delegate: #ca8a04;
   --color-eliminate: #64748b;
+  color: var(--color-ink);
+  background: var(--color-paper);
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, Segoe UI, sans-serif;
 }

@@ -7,6 +7,7 @@ import {
   Pressable,
   RefreshControl,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
@@ -93,20 +94,19 @@ export function NowScreen() {
   }
 
   return (
-    <View className="flex-1 bg-slate-50 dark:bg-slate-950">
-      <View className="flex-row items-center justify-between px-4 pb-2 pt-3">
-        <Text className="text-2xl font-bold text-slate-900 dark:text-slate-50">Now</Text>
-        <View className="flex-row gap-3">
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Now</Text>
+        <View style={styles.headerActions}>
           <Pressable
             onPress={() => setCaptureOpen(true)}
-            className="rounded-full px-3 py-1.5"
-            style={{ backgroundColor: colors.brand }}
+            style={[styles.micButton, { backgroundColor: colors.brand }]}
           >
-            <Text className="text-sm font-medium text-white">Mic</Text>
+            <Text style={styles.micLabel}>Mic</Text>
           </Pressable>
           <Link href="/settings" asChild>
             <Pressable>
-              <Text style={{ color: colors.brand }}>Settings</Text>
+              <Text style={{ color: colors.brand, fontWeight: "600" }}>Settings</Text>
             </Pressable>
           </Link>
         </View>
@@ -114,18 +114,18 @@ export function NowScreen() {
 
       {doing.length > 0 ? (
         <Pressable
-          className="mx-4 mb-2 rounded-full px-3 py-2"
-          style={{ backgroundColor: `${colors.brand}18` }}
+          style={[styles.doingChip, { backgroundColor: `${colors.brand}18` }]}
           onPress={() => void Haptics.selectionAsync()}
         >
-          <Text className="text-sm font-medium" style={{ color: colors.brand }}>
+          <Text style={{ color: colors.brand, fontWeight: "600", fontSize: 14 }}>
             {doing.length} doing across {doingProjects} project{doingProjects === 1 ? "" : "s"}
           </Text>
         </Pressable>
       ) : null}
 
       <ScrollView
-        className="flex-1 px-4"
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl
             refreshing={false}
@@ -138,35 +138,32 @@ export function NowScreen() {
         }
       >
         {pullHint ? (
-          <View className="mb-3 flex-row gap-2">
+          <View style={styles.quickAddRow}>
             <TextInput
               value={quickAdd}
               onChangeText={setQuickAdd}
               placeholder="Add to Inbox…"
               placeholderTextColor={colors.muted}
-              className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-base dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
+              style={styles.quickAddInput}
               onSubmitEditing={() => void onQuickAdd()}
               returnKeyType="done"
             />
             <Pressable
               onPress={() => void onQuickAdd()}
-              className="justify-center rounded-2xl px-3"
-              style={{ backgroundColor: colors.brand }}
+              style={[styles.addButton, { backgroundColor: colors.brand }]}
             >
-              <Text className="font-medium text-white">Add</Text>
+              <Text style={styles.micLabel}>Add</Text>
             </Pressable>
           </View>
         ) : (
-          <Text className="mb-3 text-xs text-slate-500">
+          <Text style={styles.hint}>
             Pull down to quick-add · Swipe right to complete · Swipe left for actions · Long-press
             to reorder
           </Text>
         )}
 
         {tasks.length === 0 ? (
-          <Text className="mt-8 text-center text-slate-500">
-            Inbox zero. Pull down to add a task.
-          </Text>
+          <Text style={styles.empty}>Inbox zero. Pull down to add a task.</Text>
         ) : (
           <Sortable.Flex
             flexDirection="column"
@@ -209,13 +206,9 @@ function NowTaskRow(props: {
   /** Revealed by swiping right — complete. */
   function renderLeftActions() {
     return (
-      <View className="mb-0 flex-row items-stretch pr-2">
-        <Pressable
-          onPress={props.onComplete}
-          className="justify-center px-4"
-          style={{ backgroundColor: colors.do }}
-        >
-          <Text className="font-medium text-white">Done</Text>
+      <View style={styles.actionRow}>
+        <Pressable onPress={props.onComplete} style={[styles.actionBtn, { backgroundColor: colors.do }]}>
+          <Text style={styles.micLabel}>Done</Text>
         </Pressable>
       </View>
     );
@@ -224,27 +217,21 @@ function NowTaskRow(props: {
   /** Revealed by swiping left — top / bottom / delete. */
   function renderRightActions() {
     return (
-      <View className="mb-0 flex-row items-stretch pl-2">
-        <Pressable
-          onPress={props.onTop}
-          className="justify-center px-3"
-          style={{ backgroundColor: colors.brand }}
-        >
-          <Text className="text-xs font-medium text-white">Top</Text>
+      <View style={styles.actionRow}>
+        <Pressable onPress={props.onTop} style={[styles.actionBtn, { backgroundColor: colors.brand }]}>
+          <Text style={styles.actionLabel}>Top</Text>
         </Pressable>
         <Pressable
           onPress={props.onBottom}
-          className="justify-center px-3"
-          style={{ backgroundColor: colors.schedule }}
+          style={[styles.actionBtn, { backgroundColor: colors.schedule }]}
         >
-          <Text className="text-xs font-medium text-white">Bottom</Text>
+          <Text style={styles.actionLabel}>Bottom</Text>
         </Pressable>
         <Pressable
           onPress={props.onDelete}
-          className="justify-center px-3"
-          style={{ backgroundColor: colors.eliminate }}
+          style={[styles.actionBtn, { backgroundColor: colors.eliminate }]}
         >
-          <Text className="text-xs font-medium text-white">Delete</Text>
+          <Text style={styles.actionLabel}>Delete</Text>
         </Pressable>
       </View>
     );
@@ -261,26 +248,66 @@ function NowTaskRow(props: {
       renderLeftActions={renderLeftActions}
       renderRightActions={renderRightActions}
     >
-      <Pressable
-        onPress={props.onOpen}
-        className="rounded-2xl border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-900"
-      >
-        <View className="flex-row items-center gap-2">
+      <Pressable onPress={props.onOpen} style={styles.taskCard}>
+        <View style={styles.taskRow}>
           {props.task.status === "in_progress" ? (
-            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: colors.brand }}>
-              <Text className="text-3xs text-white">Doing</Text>
+            <View style={[styles.doingBadge, { backgroundColor: colors.brand }]}>
+              <Text style={styles.actionLabel}>Doing</Text>
             </View>
           ) : null}
-          <Text className="flex-1 text-base text-slate-900 dark:text-slate-50">
-            {props.task.title}
-          </Text>
+          <Text style={styles.taskTitle}>{props.task.title}</Text>
         </View>
-        {props.task.quadrant ? (
-          <Text className="mt-1 text-xs capitalize text-slate-500">{props.task.quadrant}</Text>
-        ) : (
-          <Text className="mt-1 text-xs text-slate-500">Inbox</Text>
-        )}
+        <Text style={styles.meta}>{props.task.quadrant ?? "Inbox"}</Text>
       </Pressable>
     </Swipeable>
   );
 }
+
+const styles = StyleSheet.create({
+  screen: { flex: 1, backgroundColor: colors.paper },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 8,
+  },
+  title: { fontSize: 28, fontWeight: "700", color: colors.ink },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 12 },
+  micButton: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6 },
+  micLabel: { color: "#fff", fontWeight: "600", fontSize: 14 },
+  doingChip: { marginHorizontal: 16, marginBottom: 8, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 8 },
+  list: { flex: 1 },
+  listContent: { paddingHorizontal: 16, paddingBottom: 24 },
+  quickAddRow: { flexDirection: "row", gap: 8, marginBottom: 12 },
+  quickAddInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 16,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+    color: colors.ink,
+  },
+  addButton: { justifyContent: "center", borderRadius: 16, paddingHorizontal: 12 },
+  hint: { marginBottom: 12, fontSize: 12, color: colors.muted },
+  empty: { marginTop: 32, textAlign: "center", color: colors.muted },
+  actionRow: { flexDirection: "row", alignItems: "stretch" },
+  actionBtn: { justifyContent: "center", paddingHorizontal: 12 },
+  actionLabel: { color: "#fff", fontWeight: "600", fontSize: 12 },
+  taskCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: "#fff",
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  taskRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  doingBadge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+  taskTitle: { flex: 1, fontSize: 16, color: colors.ink },
+  meta: { marginTop: 4, fontSize: 12, color: colors.muted, textTransform: "capitalize" },
+});
