@@ -7,12 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "yatma",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#1F6B4A"
-    },
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.yatma.app",
@@ -38,7 +32,9 @@
         "backgroundColor": "#1F6B4A"
       },
       "package": "com.yatma.app",
-      "permissions": ["RECORD_AUDIO"]
+      "permissions": [
+        "RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -53,9 +49,13 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#1F6B4A",
-          "image": "./assets/splash-icon.png"
+          "image": "./assets/splash-icon.png",
+          "resizeMode": "contain"
         }
-      ]
+      ],
+      "expo-sharing",
+      "expo-web-browser",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
