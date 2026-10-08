@@ -1,17 +1,20 @@
 import { LegendList } from "@legendapp/list/react-native";
 import type { ChatMessage, ChatStreamItem, Event } from "@yatma/core";
-import { useLocalSearchParams } from "expo-router";
-import { useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useEffect, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { ChangeCard } from "./ChangeCard";
 import { summarizeChangeEvents } from "./changeSummary";
 import { MessageWithRefs } from "./RefUnfurl";
 import { eventsFromUndoPlan } from "./undoBatch";
+import { dictateFromMic } from "../dictation";
 import { useAppStore, useFoldedState } from "../../state/atoms";
 import { selectChat } from "../../state/selectors";
 import { sendChatTurn, stopChatTurn, wrapUpChat } from "../../sync/chatClient";
-import { colors } from "../../theme/colors";
+import { getSyncEngine } from "../../sync/engine";
+import { useTheme } from "../../theme/theme";
+import { Composer, Screen } from "../../ui";
 
 type LiveChange = {
   readonly batchId: string;
@@ -19,33 +22,91 @@ type LiveChange = {
   readonly summaryLabel: string;
 };
 
-/** Single chat thread with LegendList messages. */
+const SUGGESTIONS = ["What's on now?", "Clear my inbox"] as const;
+
+/** Single chat thread — or a blank new thread when id is `new`. */
 export function ChatDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const isNew = id === "new";
+  const navigation = useNavigation();
+  const router = useRouter();
+  const theme = useTheme();
   const folded = useFoldedState();
   const store = useAppStore();
-  const chat = id ? selectChat(folded, id) : undefined;
+  const chat = !isNew && id ? selectChat(folded, id) : undefined;
   const [draft, setDraft] = useState("");
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
   const [turnId, setTurnId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveChange, setLiveChange] = useState<LiveChange | null>(null);
+  const [activeChatId, setActiveChatId] = useState<string | null>(isNew ? null : id ?? null);
 
-  if (!chat || !id) {
+  async function onWrapUp() {
+    if (!activeChatId) return;
+    setBusy(true);
+    try {
+      const result = await wrapUpChat(activeChatId);
+      if (result?.events?.length) {
+        store.mergeRemoteEvents(result.events);
+        setLiveChange({
+          batchId: result.batchId,
+          events: result.events,
+          summaryLabel: "Handbook updated",
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    const showWrapUp = Boolean(activeChatId) && !isNew;
+    navigation.setOptions({
+      headerShown: true,
+      title: chat?.title ?? (isNew ? "New chat" : "Chat"),
+      headerRight: showWrapUp
+        ? () => (
+            <Pressable
+              onPress={() => void onWrapUp()}
+              disabled={busy}
+              hitSlop={8}
+              style={{ opacity: busy ? 0.5 : 1 }}
+            >
+              <Text style={{ color: theme.colors.pine, fontWeight: "600", paddingHorizontal: 8 }}>
+                Wrap up
+              </Text>
+            </Pressable>
+          )
+        : undefined,
+    });
+  }, [navigation, chat?.title, isNew, activeChatId, busy, theme.colors.pine]);
+
+  if (!isNew && (!chat || !id)) {
     return (
-      <View className="flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Text className="text-slate-500">Chat not found</Text>
-      </View>
+      <Screen edges={["bottom"]}>
+        <View style={styles.centered}>
+          <Text style={{ color: theme.colors.muted }}>Chat not found</Text>
+        </View>
+      </Screen>
     );
   }
 
-  const activeChat = chat;
-  const chatId = id;
-  const messages: ChatMessage[] = [...activeChat.messages];
+  const messages: ChatMessage[] = chat ? [...chat.messages] : [];
+  const empty = messages.length === 0 && !streaming;
 
-  async function onSend() {
-    const text = draft.trim();
+  async function onMicHold() {
+    const engine = getSyncEngine();
+    const result = await dictateFromMic({
+      callRpc: engine ? (method, payload) => engine.client.callRpc(method, payload) : undefined,
+    });
+    if (result.text) setDraft((prev) => (prev ? `${prev} ${result.text}` : result.text));
+  }
+
+  async function onSend(textOverride?: string) {
+    const text = (textOverride ?? draft).trim();
     if (!text || busy) return;
     setDraft("");
     setBusy(true);
@@ -54,12 +115,20 @@ export function ChatDetailScreen() {
     setLiveChange(null);
     try {
       await sendChatTurn({
-        chatId,
-        projectId: activeChat.projectId,
+        chatId: activeChatId ?? undefined,
+        projectId: chat?.projectId ?? null,
         text,
         handlers: {
           onItem: (item: ChatStreamItem) => {
-            if (item.kind === "started") setTurnId(item.turnId);
+            if (item.kind === "started") {
+              setTurnId(item.turnId);
+              if (item.chatId) {
+                setActiveChatId(item.chatId);
+                if (isNew) {
+                  router.replace(`/chat/${item.chatId}`);
+                }
+              }
+            }
             if (item.kind === "text_delta") {
               setStreaming((prev) => prev + item.text);
             }
@@ -86,28 +155,10 @@ export function ChatDetailScreen() {
   }
 
   async function onStop() {
-    await stopChatTurn({ chatId, turnId: turnId ?? undefined });
+    if (!activeChatId) return;
+    await stopChatTurn({ chatId: activeChatId, turnId: turnId ?? undefined });
     setBusy(false);
     setTurnId(null);
-  }
-
-  async function onWrapUp() {
-    setBusy(true);
-    try {
-      const result = await wrapUpChat(chatId);
-      if (result?.events?.length) {
-        store.mergeRemoteEvents(result.events);
-        setLiveChange({
-          batchId: result.batchId,
-          events: result.events,
-          summaryLabel: "Handbook updated",
-        });
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function onUndo() {
@@ -125,44 +176,88 @@ export function ChatDetailScreen() {
   }
 
   return (
-    <View className="flex-1 bg-slate-50 dark:bg-slate-950">
-      <View className="flex-row items-center justify-between px-4 pb-2 pt-3">
-        <Text className="flex-1 text-xl font-bold text-slate-900 dark:text-slate-50">
-          {activeChat.title ?? "Chat"}
-        </Text>
-        <Pressable onPress={() => void onWrapUp()} disabled={busy}>
-          <Text style={{ color: colors.brand }}>Wrap up</Text>
-        </Pressable>
-      </View>
+    <Screen edges={[]}>
       <LegendList
         data={messages}
         keyExtractor={(item: ChatMessage) => item.id}
         estimatedItemSize={64}
-        className="flex-1 px-4"
+        style={styles.list}
+        contentContainerStyle={{
+          paddingHorizontal: theme.space.screenX,
+          paddingTop: 12,
+          paddingBottom: 12,
+          flexGrow: 1,
+        }}
         recycleItems
+        ListEmptyComponent={
+          empty ? (
+            <View style={styles.suggestions}>
+              <Text
+                style={{
+                  color: theme.colors.muted,
+                  fontSize: theme.type.row,
+                  textAlign: "center",
+                  marginBottom: 16,
+                }}
+              >
+                Ask about your tasks, or try a suggestion.
+              </Text>
+              {SUGGESTIONS.map((suggestion) => (
+                <Pressable
+                  key={suggestion}
+                  onPress={() => void onSend(suggestion)}
+                  style={[
+                    styles.suggestion,
+                    {
+                      borderColor: theme.colors.line,
+                      backgroundColor: theme.colors.surface,
+                    },
+                  ]}
+                >
+                  <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
+                    {suggestion}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null
+        }
         renderItem={({ item }: { item: ChatMessage }) => (
           <View
-            className="mb-2 max-w-[90%] rounded-2xl px-3 py-2"
-            style={{
-              alignSelf: item.role === "user" ? "flex-end" : "flex-start",
-              backgroundColor: item.role === "user" ? colors.brand : "#E2E8F0",
-            }}
+            style={[
+              styles.bubble,
+              item.role === "user"
+                ? {
+                    alignSelf: "flex-end",
+                    backgroundColor: theme.colors.pine,
+                    maxWidth: "85%",
+                  }
+                : {
+                    alignSelf: "stretch",
+                    backgroundColor: "transparent",
+                    maxWidth: "100%",
+                    paddingHorizontal: 0,
+                  },
+            ]}
           >
             {item.role === "user" ? (
-              <Text className="text-base text-white">{item.text}</Text>
+              <Text style={{ color: theme.colors.onPine, fontSize: theme.type.row }}>
+                {item.text}
+              </Text>
             ) : (
               <MessageWithRefs text={item.text} />
             )}
           </View>
         )}
       />
+
       {streaming ? (
-        <View className="mx-4 mb-2 max-w-[90%] self-start rounded-2xl bg-slate-200 px-3 py-2">
+        <View style={{ paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
           <MessageWithRefs text={streaming} />
         </View>
       ) : null}
       {liveChange ? (
-        <View className="mx-4 mb-2">
+        <View style={{ paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
           <ChangeCard
             summary={summarizeChangeEvents(liveChange.events, [
               { label: liveChange.summaryLabel },
@@ -172,30 +267,51 @@ export function ChatDetailScreen() {
         </View>
       ) : null}
       {error ? (
-        <Text className="mx-4 mb-2 text-sm text-red-600">{error}</Text>
-      ) : null}
-      <View className="flex-row items-end gap-2 border-t border-slate-200 px-3 py-2 dark:border-slate-800">
-        {busy ? (
-          <Pressable onPress={() => void onStop()} className="rounded-full px-3 py-2 bg-slate-300">
-            <Text>Stop</Text>
-          </Pressable>
-        ) : null}
-        <TextInput
-          value={draft}
-          onChangeText={setDraft}
-          placeholder="Message…"
-          placeholderTextColor={colors.muted}
-          multiline
-          className="max-h-28 flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-base dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
-        />
-        <Pressable
-          onPress={() => void onSend()}
-          className="rounded-full px-3 py-2"
-          style={{ backgroundColor: colors.brand, opacity: busy ? 0.6 : 1 }}
+        <Text
+          style={{
+            color: theme.colors.danger,
+            fontSize: theme.type.meta,
+            paddingHorizontal: theme.space.screenX,
+            marginBottom: 8,
+          }}
         >
-          <Text className="font-medium text-white">{busy ? "…" : "Send"}</Text>
-        </Pressable>
-      </View>
-    </View>
+          {error}
+        </Text>
+      ) : null}
+
+      <Composer
+        value={draft}
+        onChangeText={setDraft}
+        placeholder="Message…"
+        onSend={() => void onSend()}
+        onMic={() => void onMicHold()}
+        busy={busy}
+        onStop={() => void onStop()}
+        autoFocus={isNew}
+      />
+    </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
+  list: { flex: 1 },
+  bubble: {
+    marginBottom: 10,
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  suggestions: {
+    flex: 1,
+    justifyContent: "center",
+    paddingVertical: 40,
+    gap: 10,
+  },
+  suggestion: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+});

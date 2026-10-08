@@ -1,6 +1,6 @@
 import { buildContext, contextText } from "@yatma/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { useFoldedState } from "../../state/atoms";
 import {
@@ -9,7 +9,8 @@ import {
   selectProject,
   selectProjectTasks,
 } from "../../state/selectors";
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
+import { EmptyState, Row, Screen } from "../../ui";
 
 function useProject() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -20,24 +21,30 @@ function useProject() {
 
 export function ProjectTasksScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const { id, folded, project } = useProject();
   const tasks = id ? selectProjectTasks(folded, id) : [];
 
   if (!project) return <MissingProject />;
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      {tasks.map((task) => (
-        <Pressable
-          key={task.id}
-          onPress={() => router.push(`/task/${task.id}`)}
-          className="mb-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-900"
-        >
-          <Text className="text-base text-slate-900 dark:text-slate-50">{task.title}</Text>
-        </Pressable>
-      ))}
-      {tasks.length === 0 ? <Text className="text-slate-500">No open tasks.</Text> : null}
-    </ScrollView>
+    <Screen edges={[]}>
+      <ScrollView>
+        {tasks.length === 0 ? (
+          <EmptyState message="No open tasks." />
+        ) : (
+          tasks.map((task, index) => (
+            <Row
+              key={task.id}
+              title={task.title}
+              subtitle={task.status.replace("_", " ")}
+              last={index === tasks.length - 1}
+              onPress={() => router.push(`/task/${task.id}`)}
+            />
+          ))
+        )}
+      </ScrollView>
+    </Screen>
   );
 }
 
@@ -49,20 +56,22 @@ export function ProjectChatsScreen() {
   if (!project) return <MissingProject />;
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      {chats.map((chat) => (
-        <Pressable
-          key={chat.id}
-          onPress={() => router.push(`/chat/${chat.id}`)}
-          className="mb-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-900"
-        >
-          <Text className="text-base text-slate-900 dark:text-slate-50">
-            {chat.title ?? "Untitled chat"}
-          </Text>
-        </Pressable>
-      ))}
-      {chats.length === 0 ? <Text className="text-slate-500">No project chats yet.</Text> : null}
-    </ScrollView>
+    <Screen edges={[]}>
+      <ScrollView>
+        {chats.length === 0 ? (
+          <EmptyState message="No project chats yet." />
+        ) : (
+          chats.map((chat, index) => (
+            <Row
+              key={chat.id}
+              title={chat.title ?? "Untitled chat"}
+              last={index === chats.length - 1}
+              onPress={() => router.push(`/chat/${chat.id}`)}
+            />
+          ))
+        )}
+      </ScrollView>
+    </Screen>
   );
 }
 
@@ -74,23 +83,28 @@ export function ProjectHandbookScreen() {
   if (!project) return <MissingProject />;
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      {pages.map((page) => (
-        <Pressable
-          key={page.id}
-          onPress={() => router.push(`/page/${page.id}`)}
-          className="mb-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-900"
-        >
-          <Text className="text-base text-slate-900 dark:text-slate-50">{page.title}</Text>
-        </Pressable>
-      ))}
-      {pages.length === 0 ? <Text className="text-slate-500">Handbook is empty.</Text> : null}
-    </ScrollView>
+    <Screen edges={[]}>
+      <ScrollView>
+        {pages.length === 0 ? (
+          <EmptyState message="Handbook is empty." />
+        ) : (
+          pages.map((page, index) => (
+            <Row
+              key={page.id}
+              title={page.title}
+              last={index === pages.length - 1}
+              onPress={() => router.push(`/page/${page.id}`)}
+            />
+          ))
+        )}
+      </ScrollView>
+    </Screen>
   );
 }
 
 export function ProjectContextScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const { id, folded, project } = useProject();
   const briefs = selectPages(folded, id).filter((page) => page.kind === "brief");
   const pinned = selectPages(folded, id).filter((page) => page.pinned);
@@ -110,30 +124,40 @@ export function ProjectContextScreen() {
   const text = contextText(built);
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      <Text className="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-200">Brief</Text>
+    <Screen edges={[]} scroll contentStyle={{ paddingHorizontal: theme.space.screenX }}>
+      <Text style={[styles.section, { color: theme.colors.muted }]}>Brief</Text>
       {briefs.map((page) => (
-        <Pressable key={page.id} onPress={() => router.push(`/page/${page.id}`)}>
-          <Text className="mb-3 text-base text-slate-800 dark:text-slate-100">{page.title}</Text>
-        </Pressable>
+        <Row
+          key={page.id}
+          title={page.title}
+          onPress={() => router.push(`/page/${page.id}`)}
+          style={{ marginHorizontal: -theme.space.screenX }}
+        />
       ))}
-      {briefs.length === 0 ? <Text className="mb-3 text-slate-500">No brief yet.</Text> : null}
+      {briefs.length === 0 ? (
+        <Text style={{ color: theme.colors.muted, marginBottom: 12 }}>No brief yet.</Text>
+      ) : null}
 
-      <Text className="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+      <Text style={[styles.section, { color: theme.colors.muted, marginTop: 16 }]}>
         Pinned pages
       </Text>
       {pinned.map((page) => (
-        <Text key={page.id} className="mb-1 text-sm text-slate-700 dark:text-slate-200">
+        <Text
+          key={page.id}
+          style={{ color: theme.colors.ink, fontSize: theme.type.row, marginBottom: 6 }}
+        >
           {page.title}
         </Text>
       ))}
-      {pinned.length === 0 ? <Text className="mb-3 text-slate-500">None pinned.</Text> : null}
+      {pinned.length === 0 ? (
+        <Text style={{ color: theme.colors.muted, marginBottom: 12 }}>None pinned.</Text>
+      ) : null}
 
-      <Text className="mb-2 mt-4 text-sm font-semibold text-slate-700 dark:text-slate-200">
+      <Text style={[styles.section, { color: theme.colors.muted, marginTop: 16 }]}>
         Agent context meter
       </Text>
-      <View className="mb-3 rounded-2xl px-3 py-3" style={{ backgroundColor: `${colors.brand}18` }}>
-        <Text style={{ color: colors.brand }}>
+      <View style={[styles.meter, { backgroundColor: theme.colors.pineSoft }]}>
+        <Text style={{ color: theme.colors.pine, fontWeight: "600" }}>
           ≈ {built.estimatedTokens} tokens
           {built.trimmed.tasks || built.trimmed.pages
             ? ` · trimmed ${built.trimmed.tasks} tasks / ${built.trimmed.pages} pages`
@@ -141,20 +165,47 @@ export function ProjectContextScreen() {
         </Text>
       </View>
 
-      <Text className="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+      <Text style={[styles.section, { color: theme.colors.muted, marginTop: 16 }]}>
         Exact model context
       </Text>
-      <Text className="mb-8 font-mono text-xs leading-5 text-slate-700 dark:text-slate-200">
+      <Text
+        style={{
+          color: theme.colors.ink,
+          fontFamily: "monospace",
+          fontSize: 12,
+          lineHeight: 18,
+          marginBottom: 32,
+        }}
+      >
         {text}
       </Text>
-    </ScrollView>
+    </Screen>
   );
 }
 
 function MissingProject() {
+  const theme = useTheme();
   return (
-    <View className="flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
-      <Text className="text-slate-500">Project not found</Text>
+    <View style={[styles.missing, { backgroundColor: theme.colors.canvas }]}>
+      <Text style={{ color: theme.colors.muted }}>Project not found</Text>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  section: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginBottom: 8,
+  },
+  meter: {
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  missing: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});

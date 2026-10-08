@@ -2,7 +2,7 @@ import type { ProjectId, Quadrant, TaskStatus } from "@yatma/core";
 import { ProjectId as ProjectIdSchema, TaskId as TaskIdSchema } from "@yatma/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useAppStore, useFoldedState } from "../../state/atoms";
 import {
@@ -11,7 +11,8 @@ import {
   selectTask,
   selectTaskHistory,
 } from "../../state/selectors";
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
+import { Row, Screen } from "../../ui";
 
 const STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done"];
 const QUADRANTS: ReadonlyArray<Quadrant | "inbox"> = [
@@ -26,6 +27,7 @@ const QUADRANTS: ReadonlyArray<Quadrant | "inbox"> = [
 export function TaskSheet() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const theme = useTheme();
   const folded = useFoldedState();
   const { updateTask } = useAppStore();
   const task = id ? selectTask(folded, id) : undefined;
@@ -45,9 +47,11 @@ export function TaskSheet() {
 
   if (!task) {
     return (
-      <View className="flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Text className="text-slate-500">Task not found</Text>
-      </View>
+      <Screen edges={["bottom"]}>
+        <View style={styles.centered}>
+          <Text style={{ color: theme.colors.muted }}>Task not found</Text>
+        </View>
+      </Screen>
     );
   }
 
@@ -85,131 +89,184 @@ export function TaskSheet() {
   }
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      <TextInput
-        value={title}
-        onChangeText={setTitle}
-        onBlur={() => void saveTitle()}
-        onSubmitEditing={() => void saveTitle()}
-        className="text-2xl font-bold text-slate-900 dark:text-slate-50"
-        placeholder="Title"
-        placeholderTextColor={colors.muted}
-      />
-      <TextInput
-        value={notes}
-        onChangeText={setNotes}
-        onBlur={() => void saveNotes()}
-        multiline
-        className="mt-2 min-h-[72px] text-base text-slate-600 dark:text-slate-300"
-        placeholder="Notes"
-        placeholderTextColor={colors.muted}
-      />
-
-      <Text className="mb-2 mt-4 text-xs font-semibold uppercase text-slate-500">Status</Text>
-      <View className="flex-row flex-wrap gap-2">
-        {STATUSES.map((status) => (
-          <Chip
-            key={status}
-            label={status.replace("_", " ")}
-            active={currentTask.status === status}
-            onPress={() => void setStatus(status)}
-          />
-        ))}
-      </View>
-
-      <Text className="mb-2 mt-4 text-xs font-semibold uppercase text-slate-500">Quadrant</Text>
-      <View className="flex-row flex-wrap gap-2">
-        {QUADRANTS.map((quadrant) => (
-          <Chip
-            key={quadrant}
-            label={quadrant}
-            active={(currentTask.quadrant ?? "inbox") === quadrant}
-            onPress={() => void setQuadrant(quadrant)}
-          />
-        ))}
-      </View>
-
-      <Text className="mb-2 mt-4 text-xs font-semibold uppercase text-slate-500">Project</Text>
-      <View className="flex-row flex-wrap gap-2">
-        <Chip
-          label="None"
-          active={currentTask.projectId === null}
-          onPress={() => void setProject(null)}
-        />
-        {projects.map((item) => (
-          <Chip
-            key={item.id}
-            label={item.title}
-            active={currentTask.projectId === item.id}
-            onPress={() => void setProject(ProjectIdSchema.make(item.id))}
-          />
-        ))}
-      </View>
-
-      {project ? (
-        <Text className="mt-2 text-xs text-slate-500">Current: {project.title}</Text>
-      ) : null}
-
-      <Pressable
-        className="mt-4 self-start rounded-full px-4 py-2"
-        style={{ backgroundColor: colors.brand }}
-        onPress={() =>
-          router.push({
-            pathname: "/(tabs)/chat",
-            params: { taskId: currentTask.id },
-          })
-        }
+    <Screen edges={["bottom"]}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: theme.space.screenX,
+          paddingBottom: 32,
+        }}
+        keyboardShouldPersistTaps="handled"
       >
-        <Text className="font-medium text-white">Discuss</Text>
-      </Pressable>
+        <TextInput
+          value={title}
+          onChangeText={setTitle}
+          onBlur={() => void saveTitle()}
+          onSubmitEditing={() => void saveTitle()}
+          style={{
+            color: theme.colors.ink,
+            fontSize: 24,
+            fontWeight: "700",
+            marginTop: 8,
+          }}
+          placeholder="Title"
+          placeholderTextColor={theme.colors.muted}
+        />
+        <TextInput
+          value={notes}
+          onChangeText={setNotes}
+          onBlur={() => void saveNotes()}
+          multiline
+          style={{
+            color: theme.colors.muted,
+            fontSize: theme.type.row,
+            marginTop: 8,
+            minHeight: 72,
+          }}
+          placeholder="Notes"
+          placeholderTextColor={theme.colors.muted}
+        />
 
-      <Text className="mb-2 mt-6 text-sm font-semibold text-slate-700 dark:text-slate-200">
-        History
-      </Text>
-      {history.length === 0 ? (
-        <Text className="text-sm text-slate-500">No history yet.</Text>
-      ) : (
-        history.map((event) => (
-          <View
-            key={event.id}
-            className="mb-2 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
-          >
-            <Text className="text-sm text-slate-800 dark:text-slate-100">{event.type}</Text>
-            {event.type === "task.updated" ? (
-              <Text className="mt-1 text-xs text-slate-500">
-                {Object.keys(event.set).join(", ")}
-              </Text>
-            ) : null}
-            {event.reason ? (
-              <Text className="mt-1 text-xs text-slate-500">{event.reason}</Text>
-            ) : null}
-            <Text className="mt-1 text-xs text-slate-400">{event.at}</Text>
-          </View>
-        ))
-      )}
-    </ScrollView>
+        <Text style={[styles.label, { color: theme.colors.muted }]}>Status</Text>
+        <View style={styles.choiceRow}>
+          {STATUSES.map((status) => (
+            <Choice
+              key={status}
+              label={status.replace("_", " ")}
+              active={currentTask.status === status}
+              onPress={() => void setStatus(status)}
+            />
+          ))}
+        </View>
+
+        <Text style={[styles.label, { color: theme.colors.muted }]}>Quadrant</Text>
+        <View style={styles.choiceRow}>
+          {QUADRANTS.map((quadrant) => (
+            <Choice
+              key={quadrant}
+              label={quadrant}
+              active={(currentTask.quadrant ?? "inbox") === quadrant}
+              onPress={() => void setQuadrant(quadrant)}
+            />
+          ))}
+        </View>
+
+        <Text style={[styles.label, { color: theme.colors.muted }]}>Project</Text>
+        <View style={styles.choiceRow}>
+          <Choice
+            label="None"
+            active={currentTask.projectId === null}
+            onPress={() => void setProject(null)}
+          />
+          {projects.map((item) => (
+            <Choice
+              key={item.id}
+              label={item.title}
+              active={currentTask.projectId === item.id}
+              onPress={() => void setProject(ProjectIdSchema.make(item.id))}
+            />
+          ))}
+        </View>
+        {project ? (
+          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 4 }}>
+            Current: {project.title}
+          </Text>
+        ) : null}
+
+        <Pressable
+          style={[styles.discuss, { backgroundColor: theme.colors.pine, marginTop: 20 }]}
+          onPress={() =>
+            router.push({
+              pathname: "/(tabs)/chat",
+              params: { taskId: currentTask.id },
+            })
+          }
+        >
+          <Text style={{ color: theme.colors.onPine, fontWeight: "600", fontSize: theme.type.row }}>
+            Discuss
+          </Text>
+        </Pressable>
+
+        <Text style={[styles.label, { color: theme.colors.muted, marginTop: 28 }]}>History</Text>
+        {history.length === 0 ? (
+          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>
+            No history yet.
+          </Text>
+        ) : (
+          history.map((event, index) => (
+            <Row
+              key={event.id}
+              title={event.type}
+              subtitle={[
+                event.type === "task.updated" ? Object.keys(event.set).join(", ") : null,
+                event.reason,
+                event.at,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              last={index === history.length - 1}
+              style={{ marginHorizontal: -theme.space.screenX }}
+            />
+          ))
+        )}
+      </ScrollView>
+    </Screen>
   );
 }
 
-function Chip(props: {
+function Choice(props: {
   readonly label: string;
   readonly active: boolean;
   readonly onPress: () => void;
 }) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={props.onPress}
-      className="rounded-full px-3 py-1.5"
-      style={{
-        backgroundColor: props.active ? colors.brand : `${colors.brand}14`,
-      }}
+      style={[
+        styles.choice,
+        {
+          backgroundColor: props.active ? theme.colors.pine : theme.colors.pineSoft,
+          minHeight: 36,
+        },
+      ]}
     >
       <Text
-        className="text-xs font-medium capitalize"
-        style={{ color: props.active ? "#fff" : colors.brand }}
+        style={{
+          color: props.active ? theme.colors.onPine : theme.colors.pine,
+          fontSize: theme.type.meta,
+          fontWeight: "600",
+          textTransform: "capitalize",
+        }}
       >
         {props.label}
       </Text>
     </Pressable>
   );
 }
+
+const styles = StyleSheet.create({
+  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
+  label: {
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  choiceRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  choice: {
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    justifyContent: "center",
+  },
+  discuss: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+});

@@ -1,14 +1,13 @@
 import type { Task, TaskId } from "@yatma/core";
 import { TaskId as TaskIdSchema } from "@yatma/core";
 import * as Haptics from "expo-haptics";
-import { Link, useRouter } from "expo-router";
+import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import {
   Pressable,
-  RefreshControl,
   ScrollView,
+  StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import Swipeable, {
@@ -23,18 +22,20 @@ import {
 } from "../capture/captureIntent";
 import { useAppStore, useFoldedState } from "../../state/atoms";
 import { selectDoingTasks, selectNowTasks } from "../../state/selectors";
-import { colors } from "../../theme/colors";
+import { quadrantColor, useTheme } from "../../theme/theme";
+import { Composer, EmptyState, IconButton, Screen, ScreenHeader } from "../../ui";
 
-/** Global priority list with Doing chip, swipe actions, long-press reorder. */
+/** Global priority list with Doing filter, swipe actions, long-press reorder. */
 export function NowScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const folded = useFoldedState();
   const { createTask, updateTask } = useAppStore();
-  const tasks = selectNowTasks(folded);
+  const allTasks = selectNowTasks(folded);
   const doing = selectDoingTasks(folded);
-  const [quickAdd, setQuickAdd] = useState("");
-  const [pullHint, setPullHint] = useState(false);
+  const [draft, setDraft] = useState("");
   const [captureOpen, setCaptureOpen] = useState(false);
+  const [showDoingOnly, setShowDoingOnly] = useState(false);
 
   useEffect(() => {
     function openIfPending() {
@@ -44,15 +45,15 @@ export function NowScreen() {
     return subscribeCaptureOpen(openIfPending);
   }, []);
 
+  const tasks = showDoingOnly ? doing : allTasks;
   const doingProjects = new Set(doing.map((task) => task.projectId ?? "inbox")).size;
 
   async function onQuickAdd() {
-    const title = quickAdd.trim();
+    const title = draft.trim();
     if (!title) return;
     await createTask({ title });
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setQuickAdd("");
-    setPullHint(false);
+    setDraft("");
   }
 
   async function completeTask(taskId: TaskId) {
@@ -93,91 +94,72 @@ export function NowScreen() {
   }
 
   return (
-    <View className="flex-1 bg-slate-50 dark:bg-slate-950">
-      <View className="flex-row items-center justify-between px-4 pb-2 pt-3">
-        <Text className="text-2xl font-bold text-slate-900 dark:text-slate-50">Now</Text>
-        <View className="flex-row gap-3">
-          <Pressable
-            onPress={() => setCaptureOpen(true)}
-            className="rounded-full px-3 py-1.5"
-            style={{ backgroundColor: colors.brand }}
-          >
-            <Text className="text-sm font-medium text-white">Mic</Text>
-          </Pressable>
-          <Link href="/settings" asChild>
-            <Pressable>
-              <Text style={{ color: colors.brand }}>Settings</Text>
-            </Pressable>
-          </Link>
-        </View>
-      </View>
+    <Screen>
+      <ScreenHeader
+        title="Now"
+        trailing={
+          <IconButton
+            name="settings-outline"
+            accessibilityLabel="Settings"
+            color={theme.colors.pine}
+            onPress={() => router.push("/settings")}
+          />
+        }
+      />
 
       {doing.length > 0 ? (
         <Pressable
-          className="mx-4 mb-2 rounded-full px-3 py-2"
-          style={{ backgroundColor: `${colors.brand}18` }}
-          onPress={() => void Haptics.selectionAsync()}
+          onPress={() => {
+            setShowDoingOnly((value) => !value);
+            void Haptics.selectionAsync();
+          }}
+          style={[
+            styles.doingChip,
+            {
+              backgroundColor: showDoingOnly ? theme.colors.pine : theme.colors.pineSoft,
+              marginHorizontal: theme.space.screenX,
+            },
+          ]}
         >
-          <Text className="text-sm font-medium" style={{ color: colors.brand }}>
-            {doing.length} doing across {doingProjects} project{doingProjects === 1 ? "" : "s"}
+          <Text
+            style={{
+              color: showDoingOnly ? theme.colors.onPine : theme.colors.pine,
+              fontWeight: "600",
+              fontSize: theme.type.meta,
+            }}
+          >
+            {doing.length} in progress
+            {doingProjects > 0 ? ` · ${doingProjects} project${doingProjects === 1 ? "" : "s"}` : ""}
+            {showDoingOnly ? " · showing" : ""}
           </Text>
         </Pressable>
       ) : null}
 
       <ScrollView
-        className="flex-1 px-4"
-        refreshControl={
-          <RefreshControl
-            refreshing={false}
-            onRefresh={() => {
-              setPullHint(true);
-              void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            }}
-            tintColor={colors.brand}
-          />
-        }
+        style={styles.list}
+        contentContainerStyle={{ paddingBottom: 12 }}
+        keyboardShouldPersistTaps="handled"
       >
-        {pullHint ? (
-          <View className="mb-3 flex-row gap-2">
-            <TextInput
-              value={quickAdd}
-              onChangeText={setQuickAdd}
-              placeholder="Add to Inbox…"
-              placeholderTextColor={colors.muted}
-              className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-base dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
-              onSubmitEditing={() => void onQuickAdd()}
-              returnKeyType="done"
-            />
-            <Pressable
-              onPress={() => void onQuickAdd()}
-              className="justify-center rounded-2xl px-3"
-              style={{ backgroundColor: colors.brand }}
-            >
-              <Text className="font-medium text-white">Add</Text>
-            </Pressable>
-          </View>
-        ) : (
-          <Text className="mb-3 text-xs text-slate-500">
-            Pull down to quick-add · Swipe right to complete · Swipe left for actions · Long-press
-            to reorder
-          </Text>
-        )}
-
         {tasks.length === 0 ? (
-          <Text className="mt-8 text-center text-slate-500">
-            Inbox zero. Pull down to add a task.
-          </Text>
+          <EmptyState
+            message={
+              showDoingOnly
+                ? "Nothing in progress. Tap the filter to show everything."
+                : "Inbox zero. Add a task below."
+            }
+          />
         ) : (
           <Sortable.Flex
             flexDirection="column"
-            gap={8}
+            gap={0}
             dragActivationDelay={220}
             onDragEnd={onDragEnd}
           >
-            {tasks.map((task) => (
+            {tasks.map((task, index) => (
               <NowTaskRow
                 key={task.id}
                 task={task}
+                last={index === tasks.length - 1}
                 onOpen={() => router.push(`/task/${task.id}`)}
                 onComplete={() => void completeTask(TaskIdSchema.make(task.id))}
                 onDelete={() => void deleteTask(TaskIdSchema.make(task.id))}
@@ -189,62 +171,69 @@ export function NowScreen() {
         )}
       </ScrollView>
 
+      <Composer
+        value={draft}
+        onChangeText={setDraft}
+        placeholder="Add a task"
+        onSend={() => void onQuickAdd()}
+        onMic={() => setCaptureOpen(true)}
+        tabBarPad
+      />
+
       <CaptureSheet
         visible={captureOpen}
         onClose={() => setCaptureOpen(false)}
         onSend={() => setCaptureOpen(false)}
       />
-    </View>
+    </Screen>
   );
 }
 
 function NowTaskRow(props: {
   readonly task: Task;
+  readonly last: boolean;
   readonly onOpen: () => void;
   readonly onComplete: () => void;
   readonly onDelete: () => void;
   readonly onTop: () => void;
   readonly onBottom: () => void;
 }) {
-  /** Revealed by swiping right — complete. */
+  const theme = useTheme();
+  const tick = quadrantColor(theme, props.task.quadrant ?? "inbox");
+
   function renderLeftActions() {
     return (
-      <View className="mb-0 flex-row items-stretch pr-2">
+      <View style={styles.actionRow}>
         <Pressable
           onPress={props.onComplete}
-          className="justify-center px-4"
-          style={{ backgroundColor: colors.do }}
+          style={[styles.actionBtn, { backgroundColor: theme.colors.do }]}
         >
-          <Text className="font-medium text-white">Done</Text>
+          <Text style={styles.actionLabel}>Done</Text>
         </Pressable>
       </View>
     );
   }
 
-  /** Revealed by swiping left — top / bottom / delete. */
   function renderRightActions() {
     return (
-      <View className="mb-0 flex-row items-stretch pl-2">
+      <View style={styles.actionRow}>
         <Pressable
           onPress={props.onTop}
-          className="justify-center px-3"
-          style={{ backgroundColor: colors.brand }}
+          style={[styles.actionBtn, { backgroundColor: theme.colors.pine }]}
         >
-          <Text className="text-xs font-medium text-white">Top</Text>
+          <Text style={styles.actionLabel}>Top</Text>
         </Pressable>
         <Pressable
           onPress={props.onBottom}
-          className="justify-center px-3"
-          style={{ backgroundColor: colors.schedule }}
+          style={[styles.actionBtn, { backgroundColor: theme.colors.schedule }]}
         >
-          <Text className="text-xs font-medium text-white">Bottom</Text>
+          <Text style={styles.actionLabel}>Bottom</Text>
         </Pressable>
         <Pressable
           onPress={props.onDelete}
-          className="justify-center px-3"
-          style={{ backgroundColor: colors.eliminate }}
+          style={[styles.actionBtn, { backgroundColor: theme.colors.eliminate }]}
         >
-          <Text className="text-xs font-medium text-white">Delete</Text>
+          <Text style={styles.actionLabel}>Delete</Text>
         </Pressable>
       </View>
     );
@@ -255,7 +244,6 @@ function NowTaskRow(props: {
       overshootRight={false}
       overshootLeft={false}
       onSwipeableOpen={(direction) => {
-        // LEFT means the left-side actions were opened (user swiped right).
         if (direction === SwipeDirection.LEFT) props.onComplete();
       }}
       renderLeftActions={renderLeftActions}
@@ -263,24 +251,91 @@ function NowTaskRow(props: {
     >
       <Pressable
         onPress={props.onOpen}
-        className="rounded-2xl border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-900"
+        style={[
+          styles.taskRow,
+          {
+            minHeight: theme.touch,
+            paddingHorizontal: theme.space.screenX,
+            borderBottomColor: theme.colors.line,
+            borderBottomWidth: props.last ? 0 : StyleSheet.hairlineWidth,
+            backgroundColor: theme.colors.canvas,
+          },
+        ]}
       >
-        <View className="flex-row items-center gap-2">
-          {props.task.status === "in_progress" ? (
-            <View className="rounded-full px-2 py-0.5" style={{ backgroundColor: colors.brand }}>
-              <Text className="text-3xs text-white">Doing</Text>
-            </View>
-          ) : null}
-          <Text className="flex-1 text-base text-slate-900 dark:text-slate-50">
-            {props.task.title}
+        <Pressable
+          onPress={props.onComplete}
+          accessibilityLabel="Complete task"
+          hitSlop={8}
+          style={[styles.circle, { borderColor: theme.colors.line }]}
+        />
+        <View style={[styles.tick, { backgroundColor: tick }]} />
+        <View style={styles.taskBody}>
+          <View style={styles.titleRow}>
+            {props.task.status === "in_progress" ? (
+              <View style={[styles.doingBadge, { backgroundColor: theme.colors.pine }]}>
+                <Text style={{ color: theme.colors.onPine, fontSize: 11, fontWeight: "600" }}>
+                  Doing
+                </Text>
+              </View>
+            ) : null}
+            <Text
+              style={{
+                flex: 1,
+                color: theme.colors.ink,
+                fontSize: theme.type.row,
+                fontWeight: "500",
+              }}
+              numberOfLines={2}
+            >
+              {props.task.title}
+            </Text>
+          </View>
+          <Text
+            style={{
+              marginTop: 2,
+              color: theme.colors.muted,
+              fontSize: theme.type.meta,
+              textTransform: "capitalize",
+            }}
+          >
+            {props.task.quadrant ?? "Inbox"}
           </Text>
         </View>
-        {props.task.quadrant ? (
-          <Text className="mt-1 text-xs capitalize text-slate-500">{props.task.quadrant}</Text>
-        ) : (
-          <Text className="mt-1 text-xs text-slate-500">Inbox</Text>
-        )}
       </Pressable>
     </Swipeable>
   );
 }
+
+const styles = StyleSheet.create({
+  doingChip: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginBottom: 8,
+  },
+  list: { flex: 1 },
+  actionRow: { flexDirection: "row", alignItems: "stretch" },
+  actionBtn: { justifyContent: "center", paddingHorizontal: 14, minWidth: 64 },
+  actionLabel: { color: "#fff", fontWeight: "600", fontSize: 12 },
+  taskRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    gap: 10,
+  },
+  circle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+  },
+  tick: {
+    width: 3,
+    alignSelf: "stretch",
+    borderRadius: 2,
+  },
+  taskBody: { flex: 1, minWidth: 0 },
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  doingBadge: { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2 },
+});

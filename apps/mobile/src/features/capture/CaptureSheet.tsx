@@ -1,6 +1,13 @@
 import type { ChatStreamItem, Event } from "@yatma/core";
 import { useState } from "react";
-import { Modal, Pressable, Text, TextInput, View } from "react-native";
+import {
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 
 import { ChangeCard } from "../chat/ChangeCard";
@@ -10,7 +17,8 @@ import { dictateFromMic } from "../dictation";
 import { useAppStore } from "../../state/atoms";
 import { sendChatTurn } from "../../sync/chatClient";
 import { getSyncEngine } from "../../sync/engine";
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
+import { Composer, IconButton } from "../../ui";
 
 type CaptureSheetProps = {
   readonly visible: boolean;
@@ -24,9 +32,11 @@ type LiveChange = {
   readonly summaryLabel: string;
 };
 
-/** Compact global-chat capture opened from the Now mic. */
+/** Bottom-anchored capture sheet opened from the Now mic. */
 export function CaptureSheet(props: CaptureSheetProps) {
   const { visible, onClose, onSend } = props;
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const store = useAppStore();
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -98,56 +108,122 @@ export function CaptureSheet(props: CaptureSheetProps) {
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View className="flex-1 justify-end bg-black/40">
-        <View className="rounded-t-3xl bg-white p-4 dark:bg-slate-950">
-          <View className="mb-3 flex-row items-center justify-between">
-            <Text className="text-lg font-semibold text-slate-900 dark:text-slate-50">
-              Capture
-            </Text>
-            <Pressable onPress={onClose}>
-              <Text style={{ color: colors.brand }}>Close</Text>
-            </Pressable>
+      <View style={styles.modalRoot}>
+        <Pressable
+          style={[styles.backdrop, { backgroundColor: theme.colors.overlay }]}
+          onPress={onClose}
+        />
+        <View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: theme.colors.surface,
+              paddingBottom: Math.max(insets.bottom, 8),
+            },
+          ]}
+        >
+        <View style={[styles.grabber, { backgroundColor: theme.colors.line }]} />
+        <View style={styles.header}>
+          <Text
+            style={{
+              color: theme.colors.ink,
+              fontSize: 18,
+              fontWeight: "700",
+            }}
+          >
+            Capture
+          </Text>
+          <IconButton
+            name="close"
+            accessibilityLabel="Close"
+            color={theme.colors.muted}
+            onPress={onClose}
+          />
+        </View>
+        <Text
+          style={{
+            color: theme.colors.muted,
+            fontSize: theme.type.meta,
+            paddingHorizontal: theme.space.screenX,
+            marginBottom: 8,
+          }}
+        >
+          Add X, move Y to the top, finish Z…
+        </Text>
+        {streaming ? (
+          <Text
+            style={{
+              color: theme.colors.muted,
+              fontSize: theme.type.meta,
+              paddingHorizontal: theme.space.screenX,
+              marginBottom: 8,
+            }}
+          >
+            {streaming}
+          </Text>
+        ) : null}
+        {error ? (
+          <Text
+            style={{
+              color: theme.colors.danger,
+              fontSize: theme.type.meta,
+              paddingHorizontal: theme.space.screenX,
+              marginBottom: 8,
+            }}
+          >
+            {error}
+          </Text>
+        ) : null}
+        {liveChange ? (
+          <View style={{ paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
+            <ChangeCard
+              summary={summarizeChangeEvents(liveChange.events, [
+                { label: liveChange.summaryLabel },
+              ])}
+              onUndo={() => void onUndo()}
+            />
           </View>
-          <TextInput
+        ) : null}
+          <Composer
             value={draft}
             onChangeText={setDraft}
-            placeholder="Add X, move Y to the top, finish Z…"
-            placeholderTextColor={colors.muted}
-            multiline
-            className="min-h-24 rounded-2xl border border-slate-200 px-3 py-2 text-base text-slate-900 dark:border-slate-700 dark:text-slate-50"
+            placeholder="Dictate or type a change…"
+            onSend={() => void onSubmit()}
+            onMic={() => void onMic()}
+            busy={busy}
+            autoFocus
           />
-          <View className="mt-3 flex-row gap-2">
-            <Pressable
-              onPress={() => void onMic()}
-              className="rounded-full px-4 py-2"
-              style={{ backgroundColor: colors.brandMuted }}
-            >
-              <Text className="font-medium text-white">Mic</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => void onSubmit()}
-              className="rounded-full px-4 py-2"
-              style={{ backgroundColor: colors.brand, opacity: busy ? 0.6 : 1 }}
-            >
-              <Text className="font-medium text-white">{busy ? "…" : "Send"}</Text>
-            </Pressable>
-          </View>
-          {streaming ? (
-            <Text className="mt-3 text-sm text-slate-600 dark:text-slate-300">{streaming}</Text>
-          ) : null}
-          {error ? <Text className="mt-2 text-sm text-red-600">{error}</Text> : null}
-          {liveChange ? (
-            <View className="mt-4">
-              <ChangeCard
-                summary={summarizeChangeEvents(liveChange.events, [
-                  { label: liveChange.summaryLabel },
-                ])}
-                onUndo={() => void onUndo()}
-              />
-            </View>
-          ) : null}
         </View>
       </View>
     </Modal>
   );
 }
+
+const styles = StyleSheet.create({
+  modalRoot: {
+    flex: 1,
+    justifyContent: "flex-end",
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFill,
+  },
+  sheet: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 8,
+  },
+  grabber: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    marginBottom: 8,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 8,
+    paddingLeft: 16,
+  },
+});

@@ -2,9 +2,10 @@ import { useSignIn } from "@clerk/expo";
 import { useSignInWithApple } from "@clerk/expo/apple";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert, Pressable, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { colors } from "../../src/theme/colors";
+import { useTheme } from "../../src/theme/theme";
+import { Screen } from "../../src/ui";
 
 function isClerkConfigured(): boolean {
   return Boolean(process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim());
@@ -20,25 +21,28 @@ export default function SignInScreen() {
 
 function SignInPlaceholder() {
   const router = useRouter();
+  const theme = useTheme();
   return (
-    <View className="flex-1 justify-center bg-slate-50 px-6 dark:bg-slate-950">
-      <Text className="mb-2 text-3xl font-bold text-slate-900 dark:text-slate-50">Yatma</Text>
-      <Text className="mb-6 text-base text-slate-600 dark:text-slate-300">
+    <Screen edges={["top", "bottom"]} contentStyle={styles.centerPad}>
+      <Text style={[styles.brand, { color: theme.colors.ink }]}>Yatma</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: theme.type.row, marginBottom: 24 }}>
         Set EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY to enable Clerk sign-in.
       </Text>
       <Pressable
         onPress={() => router.replace("/(tabs)")}
-        className="rounded-2xl px-4 py-3"
-        style={{ backgroundColor: colors.brand }}
+        style={[styles.primary, { backgroundColor: theme.colors.pine }]}
       >
-        <Text className="text-center font-medium text-white">Continue offline</Text>
+        <Text style={{ color: theme.colors.onPine, fontWeight: "600", textAlign: "center" }}>
+          Continue offline
+        </Text>
       </Pressable>
-    </View>
+    </Screen>
   );
 }
 
 function ClerkSignIn() {
   const router = useRouter();
+  const theme = useTheme();
   const { startAppleAuthenticationFlow } = useSignInWithApple();
   const { signIn } = useSignIn();
   const [email, setEmail] = useState("");
@@ -96,17 +100,27 @@ function ClerkSignIn() {
   }
 
   return (
-    <View className="flex-1 justify-center bg-slate-50 px-6 dark:bg-slate-950">
-      <Text className="mb-2 text-3xl font-bold text-slate-900 dark:text-slate-50">Yatma</Text>
-      <Text className="mb-6 text-base text-slate-600 dark:text-slate-300">
+    <Screen edges={["top", "bottom"]} contentStyle={styles.centerPad}>
+      <Text style={[styles.brand, { color: theme.colors.ink }]}>Yatma</Text>
+      <Text style={{ color: theme.colors.muted, fontSize: theme.type.row, marginBottom: 28 }}>
         Sign in to sync across devices.
       </Text>
 
-      <Pressable onPress={() => void onApple()} className="mb-3 rounded-2xl bg-black px-4 py-3">
-        <Text className="text-center font-medium text-white">Sign in with Apple</Text>
+      <Pressable onPress={() => void onApple()} style={[styles.primary, { backgroundColor: "#000" }]}>
+        <Text style={{ color: "#fff", fontWeight: "600", textAlign: "center" }}>
+          Sign in with Apple
+        </Text>
       </Pressable>
 
-      <Text className="mb-2 mt-4 text-sm font-semibold text-slate-700 dark:text-slate-200">
+      <Text
+        style={{
+          color: theme.colors.muted,
+          fontSize: theme.type.meta,
+          fontWeight: "600",
+          marginTop: 28,
+          marginBottom: 8,
+        }}
+      >
         Email code
       </Text>
       <TextInput
@@ -115,8 +129,15 @@ function ClerkSignIn() {
         autoCapitalize="none"
         keyboardType="email-address"
         placeholder="you@example.com"
-        placeholderTextColor={colors.muted}
-        className="mb-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-base dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
+        placeholderTextColor={theme.colors.muted}
+        style={[
+          styles.input,
+          {
+            color: theme.colors.ink,
+            borderColor: theme.colors.line,
+            backgroundColor: theme.colors.surface,
+          },
+        ]}
       />
       {pendingVerification ? (
         <>
@@ -125,26 +146,77 @@ function ClerkSignIn() {
             onChangeText={setCode}
             keyboardType="number-pad"
             placeholder="123456"
-            placeholderTextColor={colors.muted}
-            className="mb-2 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-base dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
+            placeholderTextColor={theme.colors.muted}
+            style={[
+              styles.input,
+              {
+                color: theme.colors.ink,
+                borderColor: theme.colors.line,
+                backgroundColor: theme.colors.surface,
+              },
+            ]}
           />
           <Pressable
             onPress={() => void onEmailVerify()}
-            className="rounded-2xl px-4 py-3"
-            style={{ backgroundColor: colors.brand }}
+            style={[styles.primary, { backgroundColor: theme.colors.pine }]}
           >
-            <Text className="text-center font-medium text-white">Verify code</Text>
+            <Text style={{ color: theme.colors.onPine, fontWeight: "600", textAlign: "center" }}>
+              Verify code
+            </Text>
           </Pressable>
         </>
       ) : (
         <Pressable
           onPress={() => void onEmailStart()}
-          className="rounded-2xl px-4 py-3"
-          style={{ backgroundColor: colors.brand }}
+          style={[styles.primary, { backgroundColor: theme.colors.pine }]}
         >
-          <Text className="text-center font-medium text-white">Send code</Text>
+          <Text style={{ color: theme.colors.onPine, fontWeight: "600", textAlign: "center" }}>
+            Send code
+          </Text>
         </Pressable>
       )}
-    </View>
+
+      <Pressable onPress={() => router.replace("/(tabs)")} style={styles.offline}>
+        <Text style={{ color: theme.colors.muted, fontSize: theme.type.row, textAlign: "center" }}>
+          Continue offline
+        </Text>
+      </Pressable>
+    </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  centerPad: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: 24,
+  },
+  brand: {
+    fontSize: 36,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+    marginBottom: 8,
+  },
+  primary: {
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    minHeight: 48,
+    justifyContent: "center",
+    marginBottom: 10,
+  },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 16,
+    marginBottom: 10,
+    minHeight: 48,
+  },
+  offline: {
+    marginTop: 16,
+    minHeight: 44,
+    justifyContent: "center",
+  },
+});

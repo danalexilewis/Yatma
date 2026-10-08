@@ -5,11 +5,12 @@ import {
   type PageUpdatedEvent,
 } from "@yatma/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useAppStore, useFoldedState } from "../../state/atoms";
 import { selectPage } from "../../state/selectors";
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
+import { Row, Screen } from "../../ui";
 
 type PageVersion = {
   readonly eventId: string;
@@ -43,15 +44,18 @@ function pageHistory(events: readonly Event[], pageId: string): PageVersion[] {
 export function PageScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const theme = useTheme();
   const store = useAppStore();
   const folded = useFoldedState();
   const page = id ? selectPage(folded, id) : undefined;
 
   if (!page || !id) {
     return (
-      <View className="flex-1 items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Text className="text-slate-500">Page not found</Text>
-      </View>
+      <Screen edges={["bottom"]}>
+        <View style={styles.centered}>
+          <Text style={{ color: theme.colors.muted }}>Page not found</Text>
+        </View>
+      </Screen>
     );
   }
 
@@ -82,47 +86,122 @@ export function PageScreen() {
   }
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      <Text className="text-xs uppercase text-slate-500">{activePage.kind}</Text>
-      <Text className="mt-1 text-2xl font-bold text-slate-900 dark:text-slate-50">{activePage.title}</Text>
-      <Text className="mt-4 text-base leading-6 text-slate-700 dark:text-slate-200">{activePage.body}</Text>
+    <Screen
+      edges={["bottom"]}
+      scroll
+      contentStyle={{ paddingHorizontal: theme.space.screenX, paddingBottom: 40 }}
+    >
+      <Text
+        style={{
+          color: theme.colors.muted,
+          fontSize: theme.type.meta,
+          textTransform: "capitalize",
+          marginTop: 8,
+        }}
+      >
+        {activePage.kind}
+      </Text>
+      <Text
+        style={{
+          color: theme.colors.ink,
+          fontSize: 24,
+          fontWeight: "700",
+          marginTop: 4,
+        }}
+      >
+        {activePage.title}
+      </Text>
+      <Text
+        style={{
+          color: theme.colors.ink,
+          fontSize: theme.type.row,
+          lineHeight: 24,
+          marginTop: 16,
+        }}
+      >
+        {activePage.body}
+      </Text>
 
       <Pressable
-        className="mt-6 self-start rounded-full px-4 py-2"
-        style={{ backgroundColor: colors.brand }}
-        onPress={() => router.push("/chat")}
+        style={[styles.ask, { backgroundColor: theme.colors.pine, marginTop: 24 }]}
+        onPress={() => router.push("/chat/new")}
       >
-        <Text className="font-medium text-white">Ask about this</Text>
+        <Text style={{ color: theme.colors.onPine, fontWeight: "600" }}>Ask about this</Text>
       </Pressable>
 
-      <Text className="mb-2 mt-8 text-sm font-semibold text-slate-700 dark:text-slate-200">
+      <Text
+        style={{
+          color: theme.colors.muted,
+          fontSize: theme.type.meta,
+          fontWeight: "600",
+          marginTop: 32,
+          marginBottom: 8,
+        }}
+      >
         History
       </Text>
       {history.length === 0 ? (
-        <Text className="text-sm text-slate-500">No prior versions.</Text>
+        <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>
+          No prior versions.
+        </Text>
       ) : (
-        history.map((version) => (
+        history.map((version, index) => (
           <View
             key={version.eventId}
-            className="mb-2 rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
+            style={[
+              styles.version,
+              {
+                borderBottomColor: theme.colors.line,
+                borderBottomWidth: index === history.length - 1 ? 0 : StyleSheet.hairlineWidth,
+              },
+            ]}
           >
-            <Text className="text-xs text-slate-500">{version.at}</Text>
-            <Text className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-50">
-              {version.title}
-            </Text>
-            <Text className="mt-1 text-sm text-slate-600 dark:text-slate-300" numberOfLines={3}>
+            <Row
+              title={version.title}
+              subtitle={version.at}
+              style={{ marginHorizontal: -theme.space.screenX }}
+            />
+            <Text
+              style={{
+                color: theme.colors.muted,
+                fontSize: theme.type.meta,
+                marginBottom: 8,
+              }}
+              numberOfLines={3}
+            >
               {version.body}
             </Text>
             <Pressable
-              className="mt-2 self-start rounded-full px-3 py-1.5"
-              style={{ backgroundColor: colors.brandMuted }}
               onPress={() => void onRestore(version)}
+              style={[styles.restore, { backgroundColor: theme.colors.pineSoft }]}
             >
-              <Text className="text-sm font-medium text-white">Restore</Text>
+              <Text style={{ color: theme.colors.pine, fontWeight: "600", fontSize: theme.type.meta }}>
+                Restore
+              </Text>
             </Pressable>
           </View>
         ))
       )}
-    </ScrollView>
+    </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
+  ask: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  version: {
+    paddingBottom: 12,
+    marginBottom: 4,
+  },
+  restore: {
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+});

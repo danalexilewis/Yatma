@@ -1,15 +1,19 @@
-/** Brand and surface colors as plain strings for React Native style props. */
+/**
+ * Static light-palette aliases for call sites that cannot use hooks.
+ * Prefer `useTheme()` for screens that support dark mode.
+ */
 export const colors = {
-  brand: "#0F766E",
-  brandMuted: "#134E4A",
-  ink: "#0F172A",
-  paper: "#F8FAFC",
-  muted: "#64748B",
-  border: "#E2E8F0",
-  danger: "#DC2626",
-  do: "#DC2626",
-  schedule: "#2563EB",
-  delegate: "#CA8A04",
-  eliminate: "#64748B",
-  inbox: "#0F766E",
+  brand: "#1F6B4A",
+  brandMuted: "#164F37",
+  ink: "#14221E",
+  paper: "#EEF2F1",
+  muted: "#5C6B66",
+  border: "#D5DDD9",
+  danger: "#C2413A",
+  do: "#C2413A",
+  schedule: "#2A5DB0",
+  delegate: "#A16207",
+  eliminate: "#5C6B66",
+  inbox: "#1F6B4A",
+  surface: "#FFFFFF",
 } as const;

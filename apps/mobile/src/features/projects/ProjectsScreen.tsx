@@ -1,15 +1,17 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import * as Haptics from "expo-haptics";
 
 import { useAppStore, useFoldedState } from "../../state/atoms";
 import { selectActiveProjects, selectProjectTasks } from "../../state/selectors";
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
+import { EmptyState, IconButton, Row, Screen, ScreenHeader } from "../../ui";
 
-/** Project list → project tabs, with local create. */
+/** Project list → project sections, with local create. */
 export function ProjectsScreen() {
   const router = useRouter();
+  const theme = useTheme();
   const folded = useFoldedState();
   const { createProject } = useAppStore();
   const projects = selectActiveProjects(folded);
@@ -26,66 +28,102 @@ export function ProjectsScreen() {
   }
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      <View className="mb-3 flex-row items-center justify-between">
-        <Text className="text-2xl font-bold text-slate-900 dark:text-slate-50">Projects</Text>
-        <Pressable
-          onPress={() => setCreating((open) => !open)}
-          className="rounded-full px-3 py-1.5"
-          style={{ backgroundColor: colors.brand }}
-        >
-          <Text className="text-sm font-medium text-white">
-            {creating ? "Cancel" : "New"}
-          </Text>
-        </Pressable>
-      </View>
+    <Screen>
+      <ScreenHeader
+        title="Projects"
+        trailing={
+          <IconButton
+            name={creating ? "close" : "add"}
+            accessibilityLabel={creating ? "Cancel" : "New project"}
+            color={theme.colors.pine}
+            onPress={() => setCreating((open) => !open)}
+          />
+        }
+      />
 
       {creating ? (
-        <View className="mb-3 flex-row gap-2">
+        <View
+          style={[
+            styles.createRow,
+            {
+              borderBottomColor: theme.colors.line,
+              paddingHorizontal: theme.space.screenX,
+            },
+          ]}
+        >
           <TextInput
             value={title}
             onChangeText={setTitle}
             placeholder="Project title"
-            placeholderTextColor={colors.muted}
-            className="flex-1 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-base dark:border-slate-700 dark:bg-slate-900 dark:text-slate-50"
+            placeholderTextColor={theme.colors.muted}
+            style={{
+              flex: 1,
+              color: theme.colors.ink,
+              fontSize: theme.type.row,
+              minHeight: theme.touch,
+            }}
             onSubmitEditing={() => void onCreate()}
             autoFocus
+            returnKeyType="done"
           />
           <Pressable
             onPress={() => void onCreate()}
-            className="justify-center rounded-2xl px-3"
-            style={{ backgroundColor: colors.brand }}
+            style={[styles.createBtn, { backgroundColor: theme.colors.pine }]}
           >
-            <Text className="font-medium text-white">Create</Text>
+            <Text style={{ color: theme.colors.onPine, fontWeight: "600" }}>Create</Text>
           </Pressable>
         </View>
       ) : null}
 
-      {projects.length === 0 ? (
-        <Text className="mt-8 text-center text-slate-500">No projects yet.</Text>
-      ) : (
-        projects.map((project) => {
-          const openCount = selectProjectTasks(folded, project.id).length;
-          return (
-            <Pressable
-              key={project.id}
-              onPress={() => router.push(`/project/${project.id}/tasks`)}
-              className="mb-2 flex-row items-center rounded-2xl border border-slate-200 bg-white px-3 py-3 dark:border-slate-700 dark:bg-slate-900"
-            >
-              <View
-                className="mr-3 h-3 w-3 rounded-full"
-                style={{ backgroundColor: project.color ?? colors.brand }}
+      <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
+        {projects.length === 0 ? (
+          <EmptyState
+            message="No projects yet."
+            actionLabel="New project"
+            onAction={() => setCreating(true)}
+          />
+        ) : (
+          projects.map((project, index) => {
+            const openCount = selectProjectTasks(folded, project.id).length;
+            return (
+              <Row
+                key={project.id}
+                title={project.title}
+                subtitle={`${openCount} open`}
+                last={index === projects.length - 1}
+                leading={
+                  <View
+                    style={[
+                      styles.dot,
+                      { backgroundColor: project.color ?? theme.colors.pine },
+                    ]}
+                  />
+                }
+                onPress={() => router.push(`/project/${project.id}/tasks`)}
               />
-              <View className="flex-1">
-                <Text className="text-base font-medium text-slate-900 dark:text-slate-50">
-                  {project.title}
-                </Text>
-                <Text className="text-xs text-slate-500">{openCount} open</Text>
-              </View>
-            </Pressable>
-          );
-        })
-      )}
-    </ScrollView>
+            );
+          })
+        )}
+      </ScrollView>
+    </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  createRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingBottom: 8,
+  },
+  createBtn: {
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    minHeight: 40,
+    justifyContent: "center",
+  },
+  list: { flex: 1 },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+});

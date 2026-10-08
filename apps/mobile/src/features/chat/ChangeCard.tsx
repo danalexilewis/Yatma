@@ -1,6 +1,6 @@
-import { Pressable, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
 
 export type ChangeSummary = {
   readonly added: number;
@@ -15,9 +15,10 @@ type ChangeCardProps = {
   readonly onUndo?: () => void;
 };
 
-/** Live summary card rendered after an agent apply_changes turn. */
+/** Flat inset summary after an agent apply_changes turn. */
 export function ChangeCard(props: ChangeCardProps) {
   const { summary, onUndo } = props;
+  const theme = useTheme();
   const parts = [
     summary.added > 0 ? `Added ${summary.added}` : null,
     summary.completed > 0 ? `completed ${summary.completed}` : null,
@@ -26,27 +27,64 @@ export function ChangeCard(props: ChangeCardProps) {
   ].filter(Boolean);
 
   return (
-    <View className="rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-      <Text className="text-sm font-semibold text-slate-900 dark:text-slate-50">
-        {parts.length > 0 ? parts.join(", ") : "No changes"}
-      </Text>
+    <View
+      style={[
+        styles.wrap,
+        {
+          backgroundColor: theme.colors.pineSoft,
+          borderColor: theme.colors.line,
+        },
+      ]}
+    >
+      <View style={styles.row}>
+        <Text
+          style={{
+            flex: 1,
+            color: theme.colors.ink,
+            fontSize: theme.type.meta,
+            fontWeight: "600",
+          }}
+        >
+          {parts.length > 0 ? parts.join(", ") : "No changes"}
+        </Text>
+        {onUndo ? (
+          <Pressable onPress={onUndo} hitSlop={8} style={styles.undo}>
+            <Text style={{ color: theme.colors.pine, fontWeight: "700", fontSize: theme.type.meta }}>
+              Undo
+            </Text>
+          </Pressable>
+        ) : null}
+      </View>
       {summary.rows.map((row, index) => (
         <Text
           key={`${row.label}-${index}`}
-          className="mt-1 text-sm text-slate-600 dark:text-slate-300"
+          style={{
+            marginTop: 4,
+            color: theme.colors.muted,
+            fontSize: theme.type.meta,
+          }}
         >
           {row.label}
         </Text>
       ))}
-      {onUndo ? (
-        <Pressable
-          onPress={onUndo}
-          className="mt-3 self-start rounded-full px-3 py-1.5"
-          style={{ backgroundColor: colors.brand }}
-        >
-          <Text className="text-sm font-medium text-white">Undo</Text>
-        </Pressable>
-      ) : null}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  wrap: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  undo: {
+    minHeight: 32,
+    justifyContent: "center",
+  },
+});

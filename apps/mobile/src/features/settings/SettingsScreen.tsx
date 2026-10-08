@@ -1,13 +1,14 @@
 import { useAuth, useUser } from "@clerk/expo";
 import type { PingResult } from "@yatma/core";
 import { useState, type ReactNode } from "react";
-import { Alert, Pressable, ScrollView, Switch, Text, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
 import { wipeLocalData } from "../../db/database";
 import { shareEventsJsonl } from "../../export/jsonl";
 import { useAppStore } from "../../state/atoms";
 import { getSyncEngine } from "../../sync/engine";
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
+import { Screen } from "../../ui";
 
 function isClerkConfigured(): boolean {
   return Boolean(process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim());
@@ -65,6 +66,7 @@ function SettingsBody(props: {
   readonly onSignOut: () => Promise<void>;
   readonly onDeleteAccount: () => Promise<void>;
 }) {
+  const theme = useTheme();
   const { resetState } = useAppStore();
   const [autoSend, setAutoSend] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -135,33 +137,41 @@ function SettingsBody(props: {
   }
 
   return (
-    <ScrollView className="flex-1 bg-slate-50 px-4 pt-3 dark:bg-slate-950">
-      <Text className="mb-4 text-2xl font-bold text-slate-900 dark:text-slate-50">Settings</Text>
-
+    <Screen
+      edges={[]}
+      scroll
+      contentStyle={{ paddingHorizontal: theme.space.screenX, paddingTop: 12, paddingBottom: 40 }}
+    >
       <Section title="Account">
-        <Text className="text-base text-slate-800 dark:text-slate-100">
+        <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
           {props.email ?? (props.signedIn ? "Signed in" : "Signed out")}
         </Text>
       </Section>
 
       <Section title="Usage today">
-        <Text className="text-base text-slate-800 dark:text-slate-100">0 / daily cap</Text>
+        <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>0 / daily cap</Text>
       </Section>
 
       <Section title="Dictation">
-        <View className="flex-row items-center justify-between">
-          <Text className="text-base text-slate-800 dark:text-slate-100">Auto-send after dictate</Text>
-          <Switch value={autoSend} onValueChange={setAutoSend} />
+        <View style={styles.switchRow}>
+          <Text style={{ color: theme.colors.ink, fontSize: theme.type.row, flex: 1 }}>
+            Auto-send after dictate
+          </Text>
+          <Switch
+            value={autoSend}
+            onValueChange={setAutoSend}
+            trackColor={{ true: theme.colors.pine, false: theme.colors.line }}
+          />
         </View>
       </Section>
 
       <Section title="Debug">
-        <Pressable onPress={() => void onPing()} className="mb-2">
-          <Text className="text-base font-medium text-slate-800 dark:text-slate-100">
+        <Pressable onPress={() => void onPing()} style={{ minHeight: 36, justifyContent: "center" }}>
+          <Text style={{ color: theme.colors.ink, fontSize: theme.type.row, fontWeight: "500" }}>
             Ping sync server
           </Text>
         </Pressable>
-        <Text className="text-sm text-slate-600 dark:text-slate-300">
+        <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 4 }}>
           {pingError
             ? `error: ${pingError}`
             : pingResult
@@ -173,38 +183,87 @@ function SettingsBody(props: {
       <Pressable
         disabled={busy}
         onPress={() => void onExport()}
-        className="mb-3 rounded-2xl px-4 py-3"
-        style={{ backgroundColor: colors.brand }}
+        style={[styles.button, { backgroundColor: theme.colors.pine, opacity: busy ? 0.6 : 1 }]}
       >
-        <Text className="text-center font-medium text-white">
+        <Text style={{ color: theme.colors.onPine, fontWeight: "600", textAlign: "center" }}>
           {busy ? "Exporting…" : "Export JSONL"}
         </Text>
       </Pressable>
 
       <Pressable
         onPress={() => void onSignOut()}
-        className="mb-3 rounded-2xl border border-slate-300 px-4 py-3 dark:border-slate-600"
+        style={[
+          styles.button,
+          {
+            backgroundColor: theme.colors.surface,
+            borderColor: theme.colors.line,
+            borderWidth: StyleSheet.hairlineWidth,
+          },
+        ]}
       >
-        <Text className="text-center font-medium text-slate-800 dark:text-slate-100">Sign out</Text>
+        <Text style={{ color: theme.colors.ink, fontWeight: "600", textAlign: "center" }}>
+          Sign out
+        </Text>
       </Pressable>
 
       <Pressable
         disabled={busy}
         onPress={onDeleteAccount}
-        className="mb-8 rounded-2xl px-4 py-3"
-        style={{ backgroundColor: colors.danger }}
+        style={[styles.button, { backgroundColor: theme.colors.danger, opacity: busy ? 0.6 : 1 }]}
       >
-        <Text className="text-center font-medium text-white">Delete account</Text>
+        <Text style={{ color: "#fff", fontWeight: "600", textAlign: "center" }}>
+          Delete account
+        </Text>
       </Pressable>
-    </ScrollView>
+    </Screen>
   );
 }
 
 function Section(props: { readonly title: string; readonly children: ReactNode }) {
+  const theme = useTheme();
   return (
-    <View className="mb-4 rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-      <Text className="mb-2 text-xs uppercase text-slate-500">{props.title}</Text>
+    <View
+      style={[
+        styles.section,
+        {
+          backgroundColor: theme.colors.surface,
+          borderColor: theme.colors.line,
+        },
+      ]}
+    >
+      <Text
+        style={{
+          color: theme.colors.muted,
+          fontSize: theme.type.meta,
+          fontWeight: "600",
+          marginBottom: 8,
+        }}
+      >
+        {props.title}
+      </Text>
       {props.children}
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  section: {
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 14,
+    marginBottom: 12,
+  },
+  switchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  button: {
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    marginBottom: 10,
+    minHeight: 48,
+    justifyContent: "center",
+  },
+});

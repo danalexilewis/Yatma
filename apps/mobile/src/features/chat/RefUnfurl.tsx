@@ -5,11 +5,11 @@ import {
   type EntityRef,
 } from "@yatma/core";
 import { Link } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { useFoldedState } from "../../state/atoms";
 import { selectPage, selectTask } from "../../state/selectors";
-import { colors } from "../../theme/colors";
+import { useTheme } from "../../theme/theme";
 
 export type RefKind = EntityRef["kind"];
 
@@ -62,25 +62,38 @@ type RefUnfurlProps = {
   readonly refItem: ParsedRef;
 };
 
-/** Live chip or card for a task/page/chat reference. */
+/** Live chip or block for a task/page/chat reference. */
 export function RefUnfurl(props: RefUnfurlProps) {
   const { refItem } = props;
+  const theme = useTheme();
   const folded = useFoldedState();
 
   if (refItem.kind === "task") {
     const task = selectTask(folded, refItem.id);
     if (!task) {
-      return <Text className="text-sm text-slate-500">{refItem.label}</Text>;
+      return <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>{refItem.label}</Text>;
     }
     const href = `/task/${task.id}` as const;
     if (refItem.block) {
       return (
         <Link href={href} asChild>
-          <Pressable className="rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-            <Text className="text-xs uppercase" style={{ color: colors.muted }}>
-              Task · {task.status}
+          <Pressable
+            style={[
+              styles.block,
+              { borderColor: theme.colors.line, backgroundColor: theme.colors.surface },
+            ]}
+          >
+            <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>
+              Task · {task.status.replace("_", " ")}
             </Text>
-            <Text className="mt-1 text-base font-medium text-slate-900 dark:text-slate-50">
+            <Text
+              style={{
+                marginTop: 4,
+                color: theme.colors.ink,
+                fontSize: theme.type.row,
+                fontWeight: "500",
+              }}
+            >
               {task.title}
             </Text>
           </Pressable>
@@ -89,13 +102,8 @@ export function RefUnfurl(props: RefUnfurlProps) {
     }
     return (
       <Link href={href} asChild>
-        <Pressable
-          className="rounded-full px-2.5 py-1"
-          style={{ backgroundColor: `${colors.brand}22` }}
-        >
-          <Text className="text-sm" style={{ color: colors.brand }}>
-            {task.title}
-          </Text>
+        <Pressable style={[styles.chip, { backgroundColor: theme.colors.pineSoft }]}>
+          <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta }}>{task.title}</Text>
         </Pressable>
       </Link>
     );
@@ -104,16 +112,26 @@ export function RefUnfurl(props: RefUnfurlProps) {
   if (refItem.kind === "page") {
     const page = selectPage(folded, refItem.id);
     if (!page) {
-      return <Text className="text-sm text-slate-500">{refItem.label}</Text>;
+      return <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>{refItem.label}</Text>;
     }
     const href = `/page/${page.id}` as const;
     return (
       <Link href={href} asChild>
-        <Pressable className="rounded-2xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900">
-          <Text className="text-xs uppercase" style={{ color: colors.muted }}>
-            Page
-          </Text>
-          <Text className="mt-1 text-base font-medium text-slate-900 dark:text-slate-50">
+        <Pressable
+          style={[
+            styles.block,
+            { borderColor: theme.colors.line, backgroundColor: theme.colors.surface },
+          ]}
+        >
+          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>Page</Text>
+          <Text
+            style={{
+              marginTop: 4,
+              color: theme.colors.ink,
+              fontSize: theme.type.row,
+              fontWeight: "500",
+            }}
+          >
             {page.title}
           </Text>
         </Pressable>
@@ -123,8 +141,8 @@ export function RefUnfurl(props: RefUnfurlProps) {
 
   return (
     <Link href={`/chat/${refItem.id}`} asChild>
-      <Pressable className="rounded-full bg-slate-100 px-2.5 py-1 dark:bg-slate-800">
-        <Text className="text-sm text-slate-700 dark:text-slate-200">{refItem.label}</Text>
+      <Pressable style={[styles.chip, { backgroundColor: theme.colors.pineSoft }]}>
+        <Text style={{ color: theme.colors.ink, fontSize: theme.type.meta }}>{refItem.label}</Text>
       </Pressable>
     </Link>
   );
@@ -136,13 +154,16 @@ type MessageBodyProps = {
 
 /** Render message text with unfurled refs. */
 export function MessageWithRefs(props: MessageBodyProps) {
+  const theme = useTheme();
   const { refs } = parseRefs(props.text);
   if (refs.length === 0) {
-    return <Text className="text-base text-slate-800 dark:text-slate-100">{props.text}</Text>;
+    return (
+      <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>{props.text}</Text>
+    );
   }
   return (
-    <View className="gap-2">
-      <Text className="text-base text-slate-800 dark:text-slate-100">{props.text}</Text>
+    <View style={styles.message}>
+      <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>{props.text}</Text>
       {refs
         .filter((ref) => ref.block)
         .map((ref) => (
@@ -151,3 +172,21 @@ export function MessageWithRefs(props: MessageBodyProps) {
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  block: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  chip: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    alignSelf: "flex-start",
+  },
+  message: {
+    gap: 8,
+  },
+});
