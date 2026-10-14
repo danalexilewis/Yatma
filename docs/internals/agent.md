@@ -1,5 +1,11 @@
 # Agent internals
 
+Status: this document describes target behavior. Detached execution, actual
+progress streaming, whole-turn undo, shared provider/toolkit wiring, daily usage,
+and handbook curation are not yet accepted. The
+[private-alpha plan](../plans/private-alpha.md) and
+[interface register](interfaces.md) define the work and required evidence.
+
 How turns, tools, context, undo, budget, and curation work inside `UserSpace`.
 
 ## Detached turns
@@ -13,13 +19,13 @@ How turns, tools, context, undo, budget, and curation work inside `UserSpace`.
 
 Defined in `@yatma/core` (`tools.ts`), implemented in the worker against DO SQLite + core rules:
 
-| Tool | Purpose |
-| --- | --- |
-| `list_tasks` | Filter by project, status, quadrant, date; priority order. |
-| `search` | FTS5 over tasks (incl. done + reasons), pages, chat summaries. |
-| `read` | One task + history, a page, or a chat summary. |
+| Tool            | Purpose                                                                               |
+| --------------- | ------------------------------------------------------------------------------------- |
+| `list_tasks`    | Filter by project, status, quadrant, date; priority order.                            |
+| `search`        | FTS5 over tasks (incl. done + reasons), pages, chat summaries.                        |
+| `read`          | One task + history, a page, or a chat summary.                                        |
 | `apply_changes` | One batch of project/task ops; core rules validate all-or-nothing; one shared reason. |
-| `write_page` | Create or replace a page or brief (with reason). |
+| `write_page`    | Create or replace a page or brief (with reason).                                      |
 
 Agents must supply reasons on writes. No-op updates write nothing.
 

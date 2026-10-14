@@ -12,6 +12,9 @@ catalogs:
     '@clerk/expo':
       specifier: 4.6.8
       version: 4.6.8
+    '@eddy-works/never-rest':
+      specifier: 0.7.0
+      version: 0.7.0
     '@effect/atom-react':
       specifier: 4.0.1
       version: 4.0.1
@@ -30,6 +33,9 @@ catalogs:
     effect:
       specifier: 4.0.1
       version: 4.0.1
+    neverthrow:
+      specifier: 8.2.0
+      version: 8.2.0
     typescript:
       specifier: 5.9.2
       version: 5.9.2
@@ -186,9 +192,15 @@ importers:
       '@clerk/backend':
         specifier: 'catalog:'
         version: 3.18.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@eddy-works/never-rest':
+        specifier: 'catalog:'
+        version: 0.7.0(@types/node@24.12.4)(neverthrow@8.2.0)
       '@effect/sql-sqlite-do':
         specifier: 'catalog:'
         version: 4.0.1(effect@4.0.1)
+      '@yatma/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@yatma/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -198,6 +210,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 4.0.1
+      neverthrow:
+        specifier: 'catalog:'
+        version: 8.2.0
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20260601.1
@@ -214,6 +229,34 @@ importers:
       vite:
         specifier: 'catalog:'
         version: '@voidzero-dev/vite-plus-core@1.0.0(@types/node@24.12.4)(jiti@2.7.0)(terser@5.51.2)(typescript@5.9.2)(yaml@2.9.1)'
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@24.12.4)(@vitest/ui@5.0.1)(jiti@2.7.0)(terser@5.51.2)(typescript@5.9.2)(yaml@2.9.1)
+
+  packages/contracts:
+    dependencies:
+      '@eddy-works/never-rest':
+        specifier: 'catalog:'
+        version: 0.7.0(@types/node@24.12.4)(neverthrow@8.2.0)
+      '@yatma/core':
+        specifier: workspace:*
+        version: link:../core
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.1
+      neverthrow:
+        specifier: 'catalog:'
+        version: 8.2.0
+    devDependencies:
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.1(effect@4.0.1)(vitest@5.0.1)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.12.4
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.2
       vite-plus:
         specifier: 'catalog:'
         version: 1.0.0(@types/node@24.12.4)(@vitest/ui@5.0.1)(jiti@2.7.0)(terser@5.51.2)(typescript@5.9.2)(yaml@2.9.1)
@@ -883,6 +926,19 @@ packages:
     resolution: {integrity: sha512-dnxhg39lZjpTdZbHCVYPoUC9E2r8eSHbqiYDhSq2EurVPJcc9YRXlxZR1bP1nniSp078XV8GA+aUECt/Z56aQg==}
     peerDependencies:
       effect: ^4.0.0
+
+  '@eddy-works/never-rest@0.7.0':
+    resolution: {integrity: sha512-vNpSHILXM4fIPEXyjLcs7/sP8E42llHUat60SiWMYINShBxgliZibw87JO1xYiF2ZBTvVadE3X1LejjwRtwDiA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@modelcontextprotocol/sdk': ^1.20.0
+      '@types/node': '*'
+      neverthrow: ^8.0.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/sdk':
+        optional: true
+      '@types/node':
+        optional: true
 
   '@effect/atom-react@4.0.1':
     resolution: {integrity: sha512-V/vcbFCVY2AV7PvjhmOP37Cr4NofrtxBBGW6M1ckBIBxmpi3sMwdPTxj2obPNE4Ho3gkeEQzRC9zEIQ4BDNdQg==}
@@ -2192,6 +2248,12 @@ packages:
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
 
+  '@rollup/rollup-linux-x64-gnu@4.64.5':
+    resolution: {integrity: sha512-dR9nd6OKnvSS60Ifz/L7Mj5zzYyoqyRn2NwTuaOONKaa3xsVGXyp8YusMbvFyEOR94DxnwgcbgsFqkHd29ZSzQ==}
+    cpu: [x64]
+    os: [linux]
+    libc: [glibc]
+
   '@scure/base@1.2.6':
     resolution: {integrity: sha512-g/nm5FgUa//MCj1gV09zTJTaM6KBAHqLN907YVQqf7zC49+DcO4B1so4ZX07Ef10Twr6nuqYEH9GEggFXA4Fmg==}
 
@@ -2210,6 +2272,9 @@ packages:
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
+
+  '@standard-schema/spec@1.1.0':
+    resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
   '@stripe/stripe-js@5.6.0':
     resolution: {integrity: sha512-w8CEY73X/7tw2KKlL3iOk679V9bWseE4GzNz3zlaYxcTjmcmWOathRb0emgo/QQ3eoNzmq68+2Y2gxluAv3xGw==}
@@ -4204,6 +4269,10 @@ packages:
     resolution: {integrity: sha512-NMPBRMJgiQHjbd8phG3Vebdx4kZ1H121rbl5IkMqeOsahptB9BKo/d7oJ3zTXqTgagn2bWlNSXkh0QUGM31RYg==}
     engines: {node: '>=18'}
 
+  neverthrow@8.2.0:
+    resolution: {integrity: sha512-kOCT/1MCPAxY5iUV3wytNFUMUolzuwd/VF/1KCx7kf6CutrOsTie+84zTGTpgQycjvfLdBBdvBvFLqFD2c0wkQ==}
+    engines: {node: '>=18'}
+
   node-fetch@2.7.0:
     resolution: {integrity: sha512-c4FRfUm/dbcWZ7U+1Wq0AwCyFL+3nt2bEw05wfxSz+DWpWsitgmSgYmy2dQdWyKC1694ELPqMs/YzUSNozLt8A==}
     engines: {node: 4.x || >=6.0.0}
@@ -5956,6 +6025,13 @@ snapshots:
       '@distilled.cloud/core': 1.0.0-rc.13(effect@4.0.1)
       effect: 4.0.1
 
+  '@eddy-works/never-rest@0.7.0(@types/node@24.12.4)(neverthrow@8.2.0)':
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      neverthrow: 8.2.0
+    optionalDependencies:
+      '@types/node': 24.12.4
+
   '@effect/atom-react@4.0.1(effect@4.0.1)(react@19.3.0)(scheduler@0.28.0)':
     dependencies:
       effect: 4.0.1
@@ -7216,6 +7292,9 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.1': {}
 
+  '@rollup/rollup-linux-x64-gnu@4.64.5':
+    optional: true
+
   '@scure/base@1.2.6': {}
 
   '@scure/bip32@1.7.0':
@@ -7236,6 +7315,8 @@ snapshots:
       tslib: 2.8.1
 
   '@stablelib/base64@1.0.1': {}
+
+  '@standard-schema/spec@1.1.0': {}
 
   '@stripe/stripe-js@5.6.0': {}
 
@@ -9085,6 +9166,10 @@ snapshots:
   negotiator@1.1.0:
     dependencies:
       content-type: 2.1.0
+
+  neverthrow@8.2.0:
+    optionalDependencies:
+      '@rollup/rollup-linux-x64-gnu': 4.64.5
 
   node-fetch@2.7.0:
     dependencies:

@@ -8,6 +8,7 @@ import { HttpServerRequest } from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import { optionalRedacted, verifyClerkRequest, type AuthConfig } from "./auth.ts";
+import { createHealthApi } from "./http/health.ts";
 import { UserSpace, UserSpaceLive } from "./UserSpace.ts";
 
 /**
@@ -58,6 +59,7 @@ export const ApiLive = Api.make(
   Effect.gen(function* () {
     const userSpaces = yield* UserSpace;
     const { stage } = yield* Alchemy.Stack;
+    const healthApi = createHealthApi(stage);
 
     const clerkSecretRaw = yield* Config.option(Config.Redacted("CLERK_SECRET_KEY"));
     const authConfig: AuthConfig = {
@@ -66,9 +68,7 @@ export const ApiLive = Api.make(
       clerkPublishableKey: Option.getOrNull(
         yield* Config.option(Config.String("CLERK_PUBLISHABLE_KEY")),
       ),
-      clerkJwtAudience: Option.getOrNull(
-        yield* Config.option(Config.String("CLERK_JWT_AUDIENCE")),
-      ),
+      clerkJwtAudience: Option.getOrNull(yield* Config.option(Config.String("CLERK_JWT_AUDIENCE"))),
     };
 
     return {
@@ -81,11 +81,8 @@ export const ApiLive = Api.make(
           if (raw.headers.get("upgrade")?.toLowerCase() === "websocket") {
             // fall through to auth + DO
           } else {
-            return HttpServerResponse.json({
-              ok: true,
-              service: "yatma",
-              stage,
-            });
+            const response = yield* Effect.promise(() => healthApi(raw, undefined));
+            return HttpServerResponse.fromWeb(response);
           }
         }
 

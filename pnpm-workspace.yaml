@@ -8,6 +8,8 @@ allowBuilds:
   workerd: false
 
 catalog:
+  "@eddy-works/never-rest": 0.7.0
+  neverthrow: 8.2.0
   effect: 4.0.1
   "@effect/atom-react": 4.0.1
   "@effect/sql-sqlite-do": 4.0.1

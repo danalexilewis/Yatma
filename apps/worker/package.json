@@ -10,10 +10,13 @@
   },
   "dependencies": {
     "@clerk/backend": "catalog:",
+    "@eddy-works/never-rest": "catalog:",
     "@effect/sql-sqlite-do": "catalog:",
+    "@yatma/contracts": "workspace:*",
     "@yatma/core": "workspace:*",
     "alchemy": "2.0.0-beta.80",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "neverthrow": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260601.1",

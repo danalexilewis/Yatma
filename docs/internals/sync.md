@@ -1,5 +1,10 @@
 # Sync internals
 
+Status: these are target invariants. Live subscriptions, atomic remote merges,
+retry acknowledgement, and deletion completion still require the gates in the
+[private-alpha plan](../plans/private-alpha.md). Consult the
+[interface register](interfaces.md) before changing transport or persistence.
+
 Invariants for the local-first event log and `UserSpace` sync. These must not drift without an intentional migration.
 
 ## Event log
@@ -23,9 +28,9 @@ Invariants for the local-first event log and `UserSpace` sync. These must not dr
 
 ## RPCs
 
-| RPC | Role |
-| --- | --- |
-| `sync.push` | Append events; ignore known ids; assign `seq`; fold into DO entities. |
+| RPC                         | Role                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------ |
+| `sync.push`                 | Append events; ignore known ids; assign `seq`; fold into DO entities.          |
 | `sync.subscribe({ after })` | Stream missed events after the cursor, then live appends. Phone keeps `after`. |
 
 ## Agent events (dedupe)
