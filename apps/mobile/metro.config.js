@@ -1,9 +1,18 @@
 const path = require("node:path");
 const { getDefaultConfig } = require("expo/metro-config");
+const { withDevelopmentStorageReset } = require("./development/resetStorage");
 
 /** @type {import("expo/metro-config").MetroConfig} */
 const config = getDefaultConfig(__dirname);
 const workspaceRoot = path.resolve(__dirname, "../..");
+const previousEnhanceMiddleware = config.server.enhanceMiddleware;
+
+config.server.enhanceMiddleware = function enhanceDevelopmentMiddleware(middleware, server) {
+  const enhanced = previousEnhanceMiddleware
+    ? previousEnhanceMiddleware(middleware, server)
+    : middleware;
+  return withDevelopmentStorageReset(enhanced);
+};
 
 config.watchFolders = [...new Set([...(config.watchFolders ?? []), workspaceRoot])];
 

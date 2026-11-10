@@ -8,8 +8,8 @@ import { useTheme } from "../../../src/theme/theme";
 import { SegmentedControl } from "../../../src/ui";
 
 const SEGMENTS = [
+  { key: "overview", label: "Overview" },
   { key: "tasks", label: "Tasks" },
-  { key: "chats", label: "Chats" },
   { key: "handbook", label: "Handbook" },
   { key: "context", label: "Context" },
 ] as const;
@@ -27,9 +27,9 @@ export default function ProjectLayout() {
 
   const last = segments[segments.length - 1];
   const active: SectionKey =
-    last === "chats" || last === "handbook" || last === "context" || last === "tasks"
+    last === "overview" || last === "handbook" || last === "context" || last === "tasks"
       ? last
-      : "tasks";
+      : "overview";
 
   useEffect(() => {
     navigation.setOptions({

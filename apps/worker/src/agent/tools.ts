@@ -3,6 +3,7 @@ import {
   type Actor,
   type ApplyChangeOp,
   type BatchId,
+  type BatchCommand,
   type Chat,
   type ChatId,
   type Event,
@@ -30,13 +31,23 @@ import {
 } from "@yatma/core";
 import * as Effect from "effect/Effect";
 import * as Result from "effect/Result";
+import { AgentToolkit } from "@yatma/core";
+import * as Tool from "effect/ai/Tool";
+import * as Schema from "effect/Schema";
 
 import * as EventStore from "../eventStore.ts";
+import type { MutationService } from "../application/mutations.ts";
+
+/** Resolve a shared schema tool by its provider-facing name. */
+export function getToolkitTool(name: string): Tool.Any | undefined {
+  return Object.entries(AgentToolkit.tools).find(([toolName]) => toolName === name)?.[1];
+}
 
 export type ToolActorContext = {
   readonly actor: Actor;
   readonly batchId: BatchId;
   readonly nowIso: string;
+  readonly mutations?: MutationService;
 };
 
 export type ListTasksInput = {
@@ -250,6 +261,13 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
   ctx: ToolActorContext,
 ) {
   if (input.ops.length === 0) return fail("ops must be non-empty");
+  if (
+    ctx.mutations &&
+    input.ops.some((op) => op.op === "undo_batch") &&
+    input.ops.length !== 1
+  ) {
+    return fail("undo_batch must be the only operation in a mutation-backed batch");
+  }
 
   const folded = yield* EventStore.loadFolded;
   let tasks = [...folded.tasks.values()];
@@ -558,6 +576,82 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
     } satisfies ApplyChangesSuccess;
   }
 
+  if (ctx.mutations) {
+    const commands: BatchCommand[] = events.map((event) => {
+      switch (event.type) {
+        case "task.created":
+          return {
+            type: "task.create",
+            taskId: event.taskId,
+            input: {
+              title: event.title,
+              ...(event.notes === undefined ? {} : { notes: event.notes }),
+              projectId: event.projectId,
+              reason: input.reason,
+            },
+          };
+        case "task.updated":
+          return {
+            type: "task.update",
+            input: { taskId: event.taskId, ...event.set, reason: input.reason },
+          };
+        case "project.created":
+          return {
+            type: "project.create",
+            projectId: event.projectId,
+            input: {
+              title: event.title,
+              ...(event.color === undefined ? {} : { color: event.color }),
+              reason: input.reason,
+            },
+          };
+        case "project.updated":
+          return {
+            type: "project.update",
+            input: { projectId: event.projectId, ...event.set, reason: input.reason },
+          } as BatchCommand;
+        case "page.created":
+          return {
+            type: "page.create",
+            pageId: event.pageId,
+            input: {
+              projectId: event.projectId,
+              kind: event.kind,
+              title: event.title,
+              body: event.body,
+              pinned: event.pinned,
+              reason: input.reason,
+            },
+          };
+        case "page.updated":
+          return {
+            type: "page.update",
+            input: { pageId: event.pageId, ...event.set, reason: input.reason },
+          };
+        case "chat.updated":
+          return {
+            type: "chat.update",
+            input: { chatId: event.chatId, ...event.set },
+          };
+        default:
+          throw new Error(`Unsupported apply_changes event: ${event.type}`);
+      }
+    });
+    const undoSource = events.find((event) => event.undoes)?.undoes;
+    const committed = yield* ctx.mutations.executeBatch({
+      commands,
+      actor: ctx.actor,
+      batchId: ctx.batchId,
+      ...(undoSource ? { undoes: BatchIdSchema.make(undoSource) } : {}),
+      now: ctx.nowIso,
+    });
+    return {
+      batchId: committed.batchId,
+      events: committed.events,
+      summary: summarizeOps(input.ops, committed.events.length),
+    } satisfies ApplyChangesSuccess;
+  }
+
   const push = yield* EventStore.pushEvents(events, ctx.nowIso);
   if (!push.ok) {
     return fail(
@@ -590,6 +684,20 @@ export const writePage = Effect.fn("AgentTools.writePage")(function* (
   ctx: ToolActorContext,
 ) {
   const folded = yield* EventStore.loadFolded;
+  if (ctx.mutations) {
+    const pageId = input.pageId ?? PageIdSchema.make(generateShortId("pg_"));
+    const committed = yield* ctx.mutations.executeBatch({
+      commands: [input.pageId
+        ? { type: "page.update", input: { pageId, title: input.title, body: input.body, pinned: input.pinned, reason: input.reason } }
+        : { type: "page.create", pageId, input: { projectId: input.projectId, kind: input.kind, title: input.title, body: input.body, pinned: input.pinned, reason: input.reason } }],
+      actor: ctx.actor,
+      batchId: ctx.batchId,
+      now: ctx.nowIso,
+    });
+    const page = committed.snapshot.pages.get(pageId);
+    if (!page) return fail(`page not found after mutation: ${pageId}`);
+    return { page, events: committed.events } satisfies WritePageSuccess;
+  }
   const events: Event[] = [];
   let page: Page;
 

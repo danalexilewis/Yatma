@@ -2,6 +2,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { DeviceId, EventId, TaskId, type Event } from "@yatma/core";
 import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventStore from "./eventStore.ts";
 import * as NodeSqlite from "./testing/nodeSqlite.ts";
@@ -41,7 +42,7 @@ const withStore = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   );
 
 describe("eventStore", () => {
-  it.effect("ignores duplicate push ids and assigns seq", () =>
+  it.effect("retry returns original sequence assignments for every duplicate id", () =>
     withStore(
       Effect.gen(function* () {
         const now = "2026-10-06T00:00:00.000Z";
@@ -60,7 +61,98 @@ describe("eventStore", () => {
         expect(second.ok).toBe(true);
         if (!second.ok) return;
         expect(second.result.accepted).toHaveLength(0);
-        expect(second.result.assigned).toHaveLength(0);
+        expect(second.result.assigned).toEqual([{ id: event.id, seq: 1 }]);
+      }),
+    ),
+  );
+
+  it.effect("prevalidates the complete batch before writing", () =>
+    withStore(
+      Effect.gen(function* () {
+        const now = "2026-10-06T00:00:00.000Z";
+        const valid = taskCreated({
+          id: ulid("01PREVALIDATE000000000001"),
+          taskId: "t_ABCDEFG1",
+          at: now,
+        });
+        const invalid = { ...valid, id: "bad-id" };
+        const result = yield* EventStore.pushEvents([valid, invalid], now);
+        expect(result.ok).toBe(false);
+        expect((yield* EventStore.eventsAfter(0)).events).toHaveLength(0);
+        expect(yield* EventStore.getEntity("t_ABCDEFG1")).toBeNull();
+        expect(yield* EventStore.searchFts("milk")).toHaveLength(0);
+      }),
+    ),
+  );
+
+  it.effect("rejects conflicting historical content without changing prior history", () =>
+    withStore(
+      Effect.gen(function* () {
+        const now = "2026-10-06T00:00:00.000Z";
+        const original = taskCreated({
+          id: ulid("01CONFLICTEVENT00000000001"),
+          taskId: "t_BCDEFGH1",
+          at: now,
+        });
+        yield* EventStore.pushEvents([original], now);
+        const changed = { ...original, title: "Changed content" };
+        const result = yield* EventStore.pushEvents(
+          [
+            taskCreated({
+              id: ulid("01CONFLICTNEW000000000001"),
+              taskId: "t_CDEFGH01",
+              at: now,
+            }),
+            changed,
+          ],
+          now,
+        );
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.reject._tag).toBe("event_conflict");
+        expect((yield* EventStore.eventsAfter(0)).events.map((event) => event.id)).toEqual([
+          original.id,
+        ]);
+        expect(yield* EventStore.getEntity("t_CDEFGH01")).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("rolls back event append when FTS update fails", () =>
+    withStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-10-06T00:00:00.000Z";
+        const event = taskCreated({
+          id: ulid("01ROLLBACKFTS000000000001"),
+          taskId: "t_DEFGH012",
+          at: now,
+        });
+        yield* sql.unsafe("DROP TABLE search_fts");
+        const exit = yield* Effect.exit(EventStore.pushEvents([event], now));
+        expect(exit._tag).toBe("Failure");
+        expect((yield* EventStore.eventsAfter(0)).events).toHaveLength(0);
+        expect(yield* EventStore.getEntity("t_DEFGH012")).toBeNull();
+      }),
+    ),
+  );
+
+  it.effect("rolls back event append when projection update fails", () =>
+    withStore(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const now = "2026-10-06T00:00:00.000Z";
+        const event = taskCreated({
+          id: ulid("01ROLLBACKPROJECTION000001"),
+          taskId: "t_EFGH0123",
+          at: now,
+        });
+        yield* sql.unsafe(`CREATE TRIGGER fail_projection BEFORE INSERT ON entities
+          BEGIN SELECT RAISE(ABORT, 'projection failed'); END`);
+        const exit = yield* Effect.exit(EventStore.pushEvents([event], now));
+        expect(exit._tag).toBe("Failure");
+        expect((yield* EventStore.eventsAfter(0)).events).toHaveLength(0);
+        expect(yield* EventStore.getEntity("t_EFGH0123")).toBeNull();
       }),
     ),
   );

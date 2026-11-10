@@ -1,5 +1,5 @@
-import { ChatDetailScreen } from "../../src/features/chat/ChatDetailScreen";
+import { Redirect } from "expo-router";
 
 export default function ChatRoute() {
-  return <ChatDetailScreen />;
+  return <Redirect href="/" />;
 }

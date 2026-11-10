@@ -5,15 +5,16 @@ import { RegistryProvider } from "@effect/atom-react";
 import * as Linking from "expo-linking";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
-import { useColorScheme } from "react-native";
+import { useEffect, type ReactNode } from "react";
+import { Platform, Text, useColorScheme, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AuthProvider } from "../src/features/auth/AuthProvider";
 import { requestCaptureOpen } from "../src/features/capture/captureIntent";
-import { AppStateProvider } from "../src/state/atoms";
+import { AppStateProvider, useAppStore } from "../src/state/atoms";
 import { createTheme } from "../src/theme/theme";
+import { EmptyState } from "../src/ui/EmptyState";
 
 function useDictateShortcut() {
   const router = useRouter();
@@ -50,43 +51,84 @@ export default function RootLayout() {
           <AppStateProvider>
             <AuthProvider>
               <StatusBar style={scheme === "dark" ? "light" : "dark"} />
-              <DictateShortcutBridge />
-              <Stack
-                screenOptions={{
-                  headerShown: false,
-                  headerTintColor: theme.colors.pine,
-                  headerTitleStyle: {
-                    color: theme.colors.ink,
-                    fontWeight: "600",
-                  },
-                  headerStyle: {
-                    backgroundColor: theme.colors.canvas,
-                  },
-                  headerShadowVisible: false,
-                  contentStyle: {
-                    backgroundColor: theme.colors.canvas,
-                  },
-                }}
-              >
-                <Stack.Screen name="(tabs)" />
-                <Stack.Screen name="(auth)/sign-in" options={{ presentation: "modal" }} />
-                <Stack.Screen
-                  name="task/[id]"
-                  options={{ presentation: "modal", headerShown: true, title: "Task" }}
-                />
-                <Stack.Screen name="page/[id]" options={{ headerShown: true, title: "Page" }} />
-                <Stack.Screen name="chat/[id]" options={{ headerShown: true, title: "Chat" }} />
-                <Stack.Screen name="settings" options={{ headerShown: true, title: "Settings" }} />
-                <Stack.Screen
-                  name="project/[id]"
-                  options={{ headerShown: true, title: "Project" }}
-                />
-              </Stack>
+              <StorageGate>
+                <DictateShortcutBridge />
+                <StorageErrorNotice />
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    headerTintColor: theme.colors.pine,
+                    headerTitleStyle: {
+                      color: theme.colors.ink,
+                      fontWeight: "600",
+                    },
+                    headerStyle: {
+                      backgroundColor: theme.colors.canvas,
+                    },
+                    headerShadowVisible: false,
+                    contentStyle: {
+                      backgroundColor: theme.colors.canvas,
+                    },
+                  }}
+                >
+                  <Stack.Screen name="(tabs)" />
+                  <Stack.Screen name="(auth)/sign-in" options={{ presentation: "modal" }} />
+                  <Stack.Screen
+                    name="task/[id]"
+                    options={{ presentation: "card", headerShown: true, title: "Task" }}
+                  />
+                  <Stack.Screen name="page/[id]" options={{ headerShown: true, title: "Page" }} />
+                  <Stack.Screen name="chat/[id]" options={{ headerShown: true, title: "Chat" }} />
+                  <Stack.Screen
+                    name="project/[id]"
+                    options={{ headerShown: true, title: "Project" }}
+                  />
+                </Stack>
+              </StorageGate>
             </AuthProvider>
           </AppStateProvider>
         </RegistryProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
+  );
+}
+
+function StorageGate(props: { readonly children: ReactNode }) {
+  const { state, switchLocalAccount } = useAppStore();
+
+  if (!state.ready) {
+    return (
+      <View style={{ flex: 1 }} accessibilityRole={state.storageError ? "alert" : undefined}>
+        <EmptyState
+          message={state.storageError ?? "Opening your local workspace…"}
+          actionLabel={
+            state.storageError ? (Platform.OS === "web" ? "Reload" : "Retry") : undefined
+          }
+          onAction={() => {
+            if (Platform.OS === "web") window.location.reload();
+            else void switchLocalAccount(state.accountId).catch(() => {});
+          }}
+        />
+      </View>
+    );
+  }
+
+  return props.children;
+}
+
+function StorageErrorNotice() {
+  const { state } = useAppStore();
+  if (!state.storageError) return null;
+
+  return (
+    <View
+      accessibilityRole="alert"
+      style={{ backgroundColor: "#8B2F26", paddingHorizontal: 16, paddingVertical: 10 }}
+    >
+      <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "600" }}>
+        {state.storageError}
+      </Text>
+    </View>
   );
 }
 

@@ -2,11 +2,12 @@
 import * as SqliteClient from "@effect/sql-sqlite-do/SqliteClient";
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
+import type { RuntimeContext } from "alchemy/RuntimeContext";
 import {
-  BudgetExceeded,
   ClockSkew,
   InternalError,
   InvalidRequest,
+  NotFound,
   SpaceRpcGroup,
 } from "@yatma/core";
 import * as Config from "effect/Config";
@@ -16,16 +17,13 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as Turn from "./agent/turn.ts";
+import * as Supervisor from "./agent/supervisor.ts";
 import * as Usage from "./agent/usage.ts";
+import * as AccountDeletion from "./application/accountDeletion.ts";
+import * as Mutations from "./application/mutations.ts";
 import { deleteClerkUser } from "./auth.ts";
 import * as Curator from "./curator.ts";
 import * as EventStore from "./eventStore.ts";
-import * as DetachedTurn from "./proofs/detachedTurn.ts";
-
-type AbortEntry = {
-  readonly controller: AbortController;
-  readonly chatId: string;
-};
 
 /**
  * One Durable Object per Clerk user id.
@@ -53,24 +51,55 @@ export const UserSpaceLive = UserSpace.make(
       const userId = state.raw.id.name ?? state.raw.id.toString();
 
       yield* EventStore.migrate.pipe(Effect.provide(sql), Effect.orDie);
+      yield* Usage.migrate.pipe(Effect.provide(sql), Effect.orDie);
+      yield* Supervisor.migrate.pipe(Effect.provide(sql), Effect.orDie);
+      yield* AccountDeletion.migrate.pipe(Effect.provide(sql), Effect.orDie);
 
-      const turns = DetachedTurn.createRegistry();
-      const aborts = new Map<string, AbortEntry>();
+      const ensureAccountActive = () =>
+        Effect.gen(function* () {
+          const deletion = yield* AccountDeletion.getStatus(userId);
+          if (deletion) {
+            return yield* Effect.fail(new InternalError({ message: "account_deletion_in_progress" }));
+          }
+        }).pipe(
+          Effect.provide(sql),
+          Effect.mapError(() => new InternalError({ message: "account_status_failed" })),
+        );
+
+      const commitHub = yield* Mutations.makeCommitHub;
+      const mutations = Mutations.makeMutationService(commitHub, ensureAccountActive);
+      const supervisor = yield* Supervisor.makeSupervisor<RuntimeContext>({
+        sqlLayer: sql,
+        mutations,
+        model,
+        openRouterKey,
+        scheduleBackground: (work) => state.waitUntil(work),
+      });
+      yield* supervisor.recover;
 
       const idleWrapUp = yield* Alchemy.makeCallback(
         Curator.IDLE_WRAPUP_CALLBACK,
-        Effect.fn(function* (payload: { readonly chatId: string }) {
-          yield* Curator.executeWrapUp({
-            chatId: payload.chatId,
-            trigger: "idle_alarm",
-            model,
-            openRouterKey,
-          }).pipe(Effect.provide(sql), Effect.catch(() => Effect.void));
-        }),
+        (payload: { readonly chatId: string }) =>
+          Effect.gen(function* () {
+            yield* ensureAccountActive();
+            const currentChatId = yield* EventStore.getMeta("curator.pendingChatId");
+            if (currentChatId !== payload.chatId) return;
+            yield* Curator.executeWrapUp({
+              chatId: payload.chatId,
+              trigger: "idle_alarm",
+              model,
+              openRouterKey,
+              mutations,
+            });
+          }).pipe(Effect.provide(sql), Effect.catch(() => Effect.void)),
       );
 
       function scheduleIdle(chatId: string) {
         return Effect.gen(function* () {
+          const previousChatId = yield* EventStore.getMeta("curator.pendingChatId");
+          if (previousChatId && previousChatId !== chatId) {
+            yield* idleWrapUp.cancel(Curator.idleCallbackId(previousChatId));
+          }
           const plan = Curator.scheduleIdleAlarm({ lastActivityAtMs: Date.now() });
           yield* idleWrapUp.schedule(Curator.idleCallbackId(chatId), {
             at: plan.alarmAtMs,
@@ -88,10 +117,15 @@ export const UserSpaceLive = UserSpace.make(
             now: new Date().toISOString(),
           }),
 
-        "sync.push": ({ events }) =>
+        "sync.push": ({ events, deviceId }) =>
           Effect.gen(function* () {
+            yield* ensureAccountActive();
             const now = new Date().toISOString();
-            const result = yield* EventStore.pushEvents(events, now).pipe(
+            if (events.some((event) => event.by.kind !== "user" || event.by.deviceId !== deviceId)) {
+              return yield* Effect.fail(new InvalidRequest({ message: "invalid_event_actor" }));
+            }
+            const result = yield* mutations.pushIncomingBatch(events, now).pipe(
+              Effect.provide(sql),
               Effect.mapError(() => new InternalError({ message: "push_failed" })),
             );
             if (!result.ok) {
@@ -99,102 +133,121 @@ export const UserSpaceLive = UserSpace.make(
               if (reject._tag === "clock_skew") {
                 return yield* Effect.fail(new ClockSkew({ at: reject.at, now }));
               }
+              if (reject._tag === "event_conflict") {
+                return yield* Effect.fail(new InvalidRequest({ message: "event_conflict" }));
+              }
               return yield* Effect.fail(new InvalidRequest({ message: reject.reason }));
             }
             return result.result;
-          }).pipe(Effect.provide(sql)),
+          }).pipe(
+            Effect.provide(sql),
+            Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+          ),
 
         "sync.subscribe": ({ after }) =>
           Stream.unwrap(
-            EventStore.eventsAfter(after).pipe(
-              Effect.provide(sql),
-              Effect.map((batch) => Stream.succeed(batch)),
-              Effect.mapError(() => new InternalError({ message: "subscribe_failed" })),
-              Effect.catch((err) => Effect.succeed(Stream.fail(err))),
+            ensureAccountActive().pipe(
+              Effect.as(mutations.observeAfter(after).pipe(
+                Stream.provide(sql),
+                Stream.mapError(() => new InternalError({ message: "subscribe_failed" })),
+              )),
             ),
           ),
 
         "chat.send": (payload) =>
           Stream.unwrap(
             Effect.gen(function* () {
-              if (payload.events.length > 0) {
-                const now = new Date().toISOString();
-                const push = yield* EventStore.pushEvents(payload.events, now).pipe(
-                  Effect.provide(sql),
-                  Effect.mapError(() => new InternalError({ message: "chat_push_failed" })),
-                );
-                if (!push.ok) {
-                  if (push.reject._tag === "clock_skew") {
-                    return yield* Effect.fail(new ClockSkew({ at: push.reject.at, now }));
-                  }
-                  return yield* Effect.fail(new InvalidRequest({ message: push.reject.reason }));
-                }
+              yield* ensureAccountActive();
+              if (payload.events.some((event) => event.by.kind !== "user")) {
+                return yield* Effect.fail(new InvalidRequest({ message: "invalid_event_actor" }));
               }
 
               const chatId = payload.chatId ?? Turn.newChatId();
               const projectId = payload.projectId;
 
-              const turn = DetachedTurn.startTurn(turns, {
-                chatId,
-                text: payload.text,
-              });
-              const controller = new AbortController();
-              aborts.set(turn.turnId, { controller, chatId });
-
-              return Turn.runAgentTurn({
+              const receipt = yield* supervisor.start({
+                requestId: crypto.randomUUID(),
+                messageId: `msg_${crypto.randomUUID()}`,
                 chatId,
                 projectId,
                 text: payload.text,
-                turnId: turn.turnId,
-                model,
-                openRouterKey,
-                signal: controller.signal,
-              }).pipe(
-                Stream.provide(sql),
-                Stream.mapError((err) => {
-                  if (err._tag === "BudgetExceeded") {
-                    return new BudgetExceeded({ used: err.used, limit: err.limit });
-                  }
-                  return new InternalError({ message: err.message });
-                }),
-                Stream.ensuring(
-                  Effect.sync(() => {
-                    const status = controller.signal.aborted ? "stopped" : "completed";
-                    DetachedTurn.completeTurn(turns, turn.turnId, {
-                      status: status as "stopped" | "completed",
-                    });
-                    aborts.delete(turn.turnId);
-                  }),
-                ),
-                Stream.ensuring(scheduleIdle(chatId)),
+                events: payload.events,
+              }).pipe(Effect.mapError((err) => new InvalidRequest({ message: String(err) })));
+              yield* scheduleIdle(receipt.chatId);
+              return supervisor.observe(receipt.turnId, 0).pipe(
+                Stream.map((frame) => frame.item),
+                Stream.mapError(() => new InternalError({ message: "turn_observe_failed" })),
               );
             }),
           ),
 
-        "chat.stop": ({ turnId, chatId }) =>
-          Effect.sync(() => {
-            const id =
-              turnId ??
-              [...aborts.entries()].find(([, entry]) =>
-                chatId ? entry.chatId === chatId : true,
-              )?.[0] ??
-              DetachedTurn.latestTurnId(turns);
-            if (id) {
-              const entry = aborts.get(id);
-              entry?.controller.abort();
-              DetachedTurn.stopTurn(turns, id);
-              aborts.delete(id);
+        "turn.start": ({ requestId, messageId, chatId, projectId, text, events }) =>
+          Effect.gen(function* () {
+            yield* ensureAccountActive();
+            if (events.some((event) => event.by.kind !== "user")) {
+              return yield* Effect.fail(new InvalidRequest({ message: "invalid_event_actor" }));
             }
+            const receipt = yield* supervisor.start({
+              requestId,
+              messageId,
+              ...(chatId ? { chatId } : {}),
+              projectId,
+              text,
+              events,
+            }).pipe(
+              Effect.mapError((err) => new InvalidRequest({ message: String(err) })),
+            );
+            yield* scheduleIdle(receipt.chatId);
+            return receipt;
+          }),
+
+        "turn.get": ({ turnId }) =>
+          Effect.gen(function* () {
+            yield* ensureAccountActive();
+            const result = yield* supervisor.get(turnId).pipe(
+              Effect.mapError(() => new InternalError({ message: "turn_read_failed" })),
+            );
+            if (!result) return yield* Effect.fail(new NotFound({ entity: "turn", id: turnId }));
+            return result;
+          }),
+
+        "turn.stop": ({ turnId }) =>
+          Effect.gen(function* () {
+            yield* ensureAccountActive();
+            const result = yield* supervisor.stop(turnId).pipe(
+              Effect.mapError(() => new InternalError({ message: "turn_stop_failed" })),
+            );
+            if (!result.found) return yield* Effect.fail(new NotFound({ entity: "turn", id: turnId }));
+            return { ok: true as const };
+          }),
+
+        "turn.observe": ({ turnId, after }) =>
+          Stream.unwrap(
+            ensureAccountActive().pipe(
+              Effect.as(supervisor.observe(turnId, after).pipe(
+                Stream.provide(sql),
+                Stream.mapError(() => new InternalError({ message: "turn_observe_failed" })),
+              )),
+            ),
+          ),
+
+        "chat.stop": ({ turnId, chatId }) =>
+          Effect.gen(function* () {
+            yield* ensureAccountActive();
+            if (turnId) yield* supervisor.stop(turnId).pipe(Effect.mapError(() => new InternalError({ message: "turn_stop_failed" })));
+            void chatId;
             return { ok: true as const };
           }),
 
         "chat.wrapUp": ({ chatId }) =>
           Effect.gen(function* () {
+            yield* ensureAccountActive();
             const result = yield* Curator.executeWrapUp({
               chatId,
               trigger: "user",
               model,
               openRouterKey,
+              mutations,
             }).pipe(Effect.mapError(() => new InternalError({ message: "wrap_up_failed" })));
             yield* scheduleIdle(chatId);
             return result;
@@ -202,16 +255,41 @@ export const UserSpaceLive = UserSpace.make(
 
         "account.delete": () =>
           Effect.gen(function* () {
-            yield* EventStore.clearAll;
-            DetachedTurn.clearRegistry(turns);
-            aborts.clear();
-            yield* state.storage.deleteAll();
-            yield* deleteClerkUser(userId).pipe(Effect.ignore);
+            const deletion = yield* commitHub.exclusive(AccountDeletion.beginOrRead(userId));
+            if (deletion?.status === "completed") return { ok: true as const };
+            if (!deletion) return yield* Effect.fail(new InternalError({ message: "account_delete_incomplete" }));
+            const pendingChatId = yield* EventStore.getMeta("curator.pendingChatId").pipe(
+              Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+            );
+            if (pendingChatId) {
+              yield* idleWrapUp.cancel(Curator.idleCallbackId(pendingChatId)).pipe(
+                Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+              );
+            }
+            yield* supervisor.stopAll.pipe(
+              Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+            );
+            yield* EventStore.clearAll.pipe(
+              Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+            );
+            const clerk = yield* deleteClerkUser(userId).pipe(Effect.result);
+            if (clerk._tag === "Failure" || (!clerk.success.deleted && userId !== "user_test")) {
+              yield* AccountDeletion.markRemoteFailure(userId, deletion.requestId, "clerk_delete_failed");
+              return yield* Effect.fail(new InternalError({ message: "clerk_delete_unavailable" }));
+            }
+            yield* AccountDeletion.markRemoteComplete(userId, deletion.requestId);
+            yield* state.storage.deleteAll().pipe(
+              Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+            );
             return { ok: true as const };
-          }).pipe(Effect.provide(sql), Effect.orDie),
+          }).pipe(
+            Effect.provide(sql),
+            Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+          ),
 
         transcribe: (payload) =>
           Effect.gen(function* () {
+            yield* ensureAccountActive();
             // Prefer Workers AI binding when present on the DO env.
             const ai = (
               state.raw as {
@@ -270,7 +348,8 @@ export const UserSpaceLive = UserSpace.make(
           }),
 
         "usage.get": () =>
-          Usage.getUsage(sql).pipe(
+          ensureAccountActive().pipe(
+            Effect.andThen(Usage.getUsage(sql)),
             Effect.mapError(() => new InternalError({ message: "usage_read_failed" })),
           ),
       }).pipe(Layer.provide(sql));

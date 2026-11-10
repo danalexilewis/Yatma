@@ -7,6 +7,7 @@ import { err, ok } from "neverthrow";
 
 import { healthContract } from "./health.ts";
 import { syncContract } from "./sync.ts";
+import { turnContract } from "./turn.ts";
 
 const deviceId = DeviceId.make("device_contract");
 const event: Event = {
@@ -33,8 +34,24 @@ describe("never-rest contracts", () => {
     const syncResult = await checkContractOutputs(syncContract, {
       pushEvents: { accepted: [event.id], assigned: [{ id: event.id, seq: 42 }] },
     });
+    const turnResult = await checkContractOutputs(turnContract, {
+      startTurn: {
+        turnId: "turn_1",
+        chatId: "c_ABCDEFGH",
+        batchId: "batch_1",
+        status: "queued",
+      },
+      getTurn: {
+        receipt: { turnId: "turn_1", chatId: "c_ABCDEFGH", batchId: "batch_1", status: "completed" },
+        resultText: "Done",
+        batches: [],
+        error: null,
+      },
+      stopTurn: { ok: true },
+    });
     expect(healthResult.isOk()).toBe(true);
     expect(syncResult.isOk()).toBe(true);
+    expect(turnResult.isOk()).toBe(true);
   });
 
   it("rejects invalid input before a local handler can mutate storage", async () => {

@@ -3,6 +3,7 @@ import {
   type Event,
   BatchId as BatchIdSchema,
   ChatId as ChatIdSchema,
+  PageId as PageIdSchema,
   generateEventId,
   generateShortId,
 } from "@yatma/core";
@@ -13,6 +14,9 @@ import * as Redacted from "effect/Redacted";
 import * as OpenRouter from "./agent/openrouter.ts";
 import * as Tools from "./agent/tools.ts";
 import * as EventStore from "./eventStore.ts";
+import type { MutationService } from "./application/mutations.ts";
+import type { BatchCommand } from "@yatma/core";
+import * as Usage from "./agent/usage.ts";
 
 /** Idle minutes before UserSpace schedules a curator wrap-up alarm. */
 export const CURATOR_IDLE_MINUTES = 30;
@@ -130,7 +134,11 @@ export function executeWrapUp(input: {
   readonly trigger: WrapUpTrigger;
   readonly model: string;
   readonly openRouterKey: string | null;
+  readonly operationId?: string;
+  readonly mutations?: MutationService;
 }) {
+  let reservationId: string | null = null;
+  let actualTokens = 0;
   return Effect.gen(function* () {
     const plan = wrapUp({ chatId: input.chatId, trigger: input.trigger });
     const chatId = ChatIdSchema.make(input.chatId);
@@ -147,6 +155,14 @@ export function executeWrapUp(input: {
         title: null,
         summary: null,
       } satisfies WrapUpResult;
+    }
+
+    if (input.openRouterKey) {
+      const reserved = yield* Usage.reserve(input.operationId ?? `curator:${input.trigger}:${chatId}:${Date.now()}`, 12_000);
+      if (!reserved.ok) {
+        return { batchId, events: [] as Event[], title: chat.title, summary: chat.summary } satisfies WrapUpResult;
+      }
+      reservationId = reserved.reservation.reservationId;
     }
 
     const recent = chat.messages
@@ -180,6 +196,7 @@ export function executeWrapUp(input: {
       );
       if (Option.isSome(completion)) {
         parsed = parseCuratorJson(completion.value.text);
+        actualTokens = completion.value.tokens;
       }
     }
 
@@ -209,6 +226,36 @@ export function executeWrapUp(input: {
         set,
         prev,
       });
+    }
+
+    if (input.mutations) {
+      const commands: BatchCommand[] = [];
+      if (Object.keys(set).length > 0) {
+        commands.push({ type: "chat.update", input: { chatId, ...set } });
+      }
+      if (parsed.brief) {
+        const existingBrief = [...folded.pages.values()].find(
+          (page) => page.kind === "brief" && page.deletedAt === null && page.projectId === chat.projectId,
+        );
+        if (existingBrief) {
+          commands.push({
+            type: "page.update",
+            input: { pageId: existingBrief.id, title: parsed.brief.title, body: parsed.brief.body, reason: "Handbook updated" },
+          });
+        } else {
+          const pageId = PageIdSchema.make(generateShortId("pg_"));
+          commands.push({
+            type: "page.create",
+            pageId,
+            input: { projectId: chat.projectId, kind: "brief", title: parsed.brief.title, body: parsed.brief.body, reason: "Handbook updated" },
+          });
+        }
+      }
+      if (commands.length > 0) {
+        yield* input.mutations.executeBatch({ commands, actor, batchId: BatchIdSchema.make(batchId), now: nowIso });
+      }
+      const events = yield* EventStore.eventsForBatch(batchId);
+      return { batchId, events, title: title ?? null, summary: summary ?? null } satisfies WrapUpResult;
     }
 
     if (pending.length > 0) {
@@ -252,7 +299,11 @@ export function executeWrapUp(input: {
       title: title ?? null,
       summary: summary ?? null,
     } satisfies WrapUpResult;
-  });
+  }).pipe(
+    Effect.ensuring(
+      Effect.suspend(() => reservationId ? Usage.settle(reservationId, actualTokens).pipe(Effect.asVoid, Effect.ignore) : Effect.void),
+    ),
+  );
 }
 
 /** Stable id used with Alchemy.makeCallback for idle wrap-up. */

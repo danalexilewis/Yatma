@@ -22,8 +22,27 @@
             "UIApplicationShortcutItemUserInfo": {
               "url": "yatma://capture"
             }
+          },
+          {
+            "UIApplicationShortcutItemType": "com.yatma.app.dictate",
+            "UIApplicationShortcutItemTitle": "Dictate",
+            "UIApplicationShortcutItemSubtitle": "Capture by voice",
+            "UIApplicationShortcutItemIconType": "UIApplicationShortcutIconTypeCompose",
+            "UIApplicationShortcutItemUserInfo": {
+              "url": "yatma://capture"
+            }
+          },
+          {
+            "UIApplicationShortcutItemType": "com.yatma.app.dictate",
+            "UIApplicationShortcutItemTitle": "Dictate",
+            "UIApplicationShortcutItemSubtitle": "Capture by voice",
+            "UIApplicationShortcutItemIconType": "UIApplicationShortcutIconTypeCompose",
+            "UIApplicationShortcutItemUserInfo": {
+              "url": "yatma://capture"
+            }
           }
-        ]
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -33,7 +52,16 @@
       },
       "package": "com.yatma.app",
       "permissions": [
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ]
     },
     "web": {
@@ -55,18 +83,35 @@
       ],
       "expo-sharing",
       "expo-web-browser",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Yatma uses the microphone to record voice commands for transcription.",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
       "router": {
-        "origin": false
+        "origin": false,
+        "asyncRoutes": {
+          "web": true
+        }
       },
       "eas": {
-        "projectId": "yatma-placeholder"
+        "projectId": "6e4f3e01-a7fe-4b07-9e4d-a37f0798600f"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/6e4f3e01-a7fe-4b07-9e4d-a37f0798600f"
     }
   }
 }

@@ -1,12 +1,13 @@
 import { useAuth, useUser } from "@clerk/expo";
-import type { PingResult } from "@yatma/core";
-import { useState, type ReactNode } from "react";
-import { Alert, Pressable, StyleSheet, Switch, Text, View } from "react-native";
+import type { PingResult, UsageGetResult } from "@yatma/core";
+import { useEffect, useState, type ReactNode } from "react";
+import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 
 import { wipeLocalData } from "../../db/database";
 import { shareEventsJsonl } from "../../export/jsonl";
-import { useAppStore } from "../../state/atoms";
 import { getSyncEngine } from "../../sync/engine";
+import { getAutoSendDictation, setAutoSendDictation } from "./autoSendPreference";
+import { DEFAULT_TRIAGE_CAPACITY, getTriageCapacity, setTriageCapacity } from "../triage/triagePreferences";
 import { useTheme } from "../../theme/theme";
 import { Screen } from "../../ui";
 
@@ -32,21 +33,15 @@ export function SettingsScreen() {
 function ClerkSettingsBody() {
   const { isSignedIn, signOut } = useAuth();
   const { user } = useUser();
-  const { resetState } = useAppStore();
-
   async function onSignOut() {
-    await wipeLocalData();
-    resetState();
     if (isSignedIn) await signOut();
   }
 
   async function onDeleteAccount() {
     const engine = getSyncEngine();
-    if (engine) {
-      await engine.deleteAccount();
-    }
+    if (!engine) throw new Error("Account deletion is unavailable while offline.");
+    await engine.deleteAccount();
     await wipeLocalData();
-    resetState();
     if (isSignedIn) await signOut();
   }
 
@@ -67,11 +62,72 @@ function SettingsBody(props: {
   readonly onDeleteAccount: () => Promise<void>;
 }) {
   const theme = useTheme();
-  const { resetState } = useAppStore();
   const [autoSend, setAutoSend] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pingResult, setPingResult] = useState<PingResult | null>(null);
   const [pingError, setPingError] = useState<string | null>(null);
+  const [usage, setUsage] = useState<UsageGetResult | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [triageCapacity, setTriageCapacityValue] = useState(String(DEFAULT_TRIAGE_CAPACITY));
+
+  useEffect(() => {
+    let active = true;
+    void getAutoSendDictation().then(setting => {
+      if (active) setAutoSend(setting);
+    }).catch(error => {
+      Alert.alert("Settings unavailable", error instanceof Error ? error.message : String(error));
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void getTriageCapacity().then((capacity) => {
+      if (active) setTriageCapacityValue(String(capacity));
+    });
+    return () => { active = false; };
+  }, []);
+
+  async function onSaveTriageCapacity() {
+    const value = Number(triageCapacity);
+    try {
+      await setTriageCapacity(value);
+      setTriageCapacityValue(String(value));
+    } catch (error) {
+      Alert.alert("Could not save capacity", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function onAutoSendChange(enabled: boolean) {
+    setAutoSend(enabled);
+    try {
+      await setAutoSendDictation(enabled);
+    } catch (error) {
+      setAutoSend(!enabled);
+      Alert.alert("Could not save setting", error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function onRefreshUsage() {
+    setUsageError(null);
+    const engine = getSyncEngine();
+    if (!engine) {
+      setUsage(null);
+      setUsageError("Connect to your account to load usage.");
+      return;
+    }
+    try {
+      setUsage(await engine.client.usageGet());
+    } catch (error) {
+      setUsageError(error instanceof Error ? error.message : "Usage could not be loaded.");
+    }
+  }
+
+  useEffect(() => {
+    void onRefreshUsage();
+  }, []);
 
   async function onExport() {
     setBusy(true);
@@ -85,8 +141,6 @@ function SettingsBody(props: {
   }
 
   async function onSignOut() {
-    await wipeLocalData();
-    resetState();
     await props.onSignOut();
   }
 
@@ -149,7 +203,21 @@ function SettingsBody(props: {
       </Section>
 
       <Section title="Usage today">
-        <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>0 / daily cap</Text>
+        <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
+          {usage
+            ? `${usage.used.toLocaleString()} / ${usage.limit.toLocaleString()} tokens`
+            : usageError ?? "Loading usage…"}
+        </Text>
+        {usage ? (
+          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 4 }}>
+            Resets {new Date(usage.resetsAt).toLocaleString()}
+          </Text>
+        ) : null}
+        <Pressable onPress={() => void onRefreshUsage()} style={{ minHeight: 36, justifyContent: "center" }}>
+          <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta, fontWeight: "600" }}>
+            Refresh usage
+          </Text>
+        </Pressable>
       </Section>
 
       <Section title="Dictation">
@@ -159,10 +227,29 @@ function SettingsBody(props: {
           </Text>
           <Switch
             value={autoSend}
-            onValueChange={setAutoSend}
+            onValueChange={(value) => void onAutoSendChange(value)}
             trackColor={{ true: theme.colors.pine, false: theme.colors.line }}
           />
         </View>
+      </Section>
+
+      <Section title="Task triage">
+        <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
+          Maximum tasks in each bucket
+        </Text>
+        <TextInput
+          accessibilityLabel="Maximum tasks per triage bucket"
+          value={triageCapacity}
+          onChangeText={setTriageCapacityValue}
+          onBlur={() => void onSaveTriageCapacity()}
+          keyboardType="number-pad"
+          returnKeyType="done"
+          onSubmitEditing={() => void onSaveTriageCapacity()}
+          style={{ color: theme.colors.ink, borderColor: theme.colors.line, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginTop: 8, width: 100 }}
+        />
+        <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 6 }}>
+          Choose a limit from 1 to 1000. Full buckets cannot accept more tasks.
+        </Text>
       </Section>
 
       <Section title="Debug">

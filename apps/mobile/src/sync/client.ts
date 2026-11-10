@@ -23,10 +23,21 @@ import type {
   PingResult,
   SyncBatch,
   SyncPushResult,
+  TurnFrame,
+  TurnGetInput,
+  TurnGetResult,
+  TurnObserveInput,
+  TurnReceipt,
+  TurnStartInput,
+  TurnStopInput,
+  TurnStopResult,
   TranscribeInput,
   TranscribeResult,
   UsageGetResult,
 } from "@yatma/core";
+import { createClient } from "@eddy-works/never-rest/client";
+import { syncContract } from "@yatma/contracts/sync";
+import { turnContract } from "@yatma/contracts/turn";
 
 export type SyncClientStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -35,7 +46,7 @@ type SyncClientOptions = {
   readonly getToken: () => Promise<string | null>;
   readonly onStatus: (status: SyncClientStatus) => void;
   /** Fired for each `sync.subscribe` stream batch. */
-  readonly onSyncBatch?: (batch: SyncBatch) => void;
+  readonly onSyncBatch?: (batch: SyncBatch) => void | Promise<void>;
 };
 
 type PendingUnary = {
@@ -49,6 +60,8 @@ type PendingStream = {
   readonly onChunk: (value: unknown) => void;
   readonly resolve: () => void;
   readonly reject: (error: unknown) => void;
+  readonly markReady: () => void;
+  readonly enqueue: (values: readonly unknown[]) => void;
 };
 
 type Pending = PendingUnary | PendingStream;
@@ -69,6 +82,26 @@ type ExitEncoded =
  * Methods: ping, sync.push, sync.subscribe, account.delete, chat.send/stop/wrapUp, transcribe, usage.get.
  */
 export function createSyncClient(options: SyncClientOptions) {
+  const apiUrl = new URL(options.url);
+  apiUrl.protocol = apiUrl.protocol === "wss:" ? "https:" : "http:";
+  apiUrl.pathname = "/";
+  apiUrl.search = "";
+  apiUrl.hash = "";
+  const api = createClient({ ...syncContract, ...turnContract }, {
+    baseUrl: apiUrl.toString(),
+    headers: async (): Promise<HeadersInit> => {
+      const token = await options.getToken();
+      return token ? { Authorization: `Bearer ${token}` } : {};
+    },
+  });
+
+  async function unwrapApiResult<T>(result: { match: <U>(ok: (value: T) => U, error: (error: unknown) => U) => Promise<U> }): Promise<T> {
+    return result.match(
+      (value) => value,
+      (error) => { throw error; },
+    );
+  }
+
   let socket: WebSocket | null = null;
   let requestId = 0;
   const pending = new Map<string | number, Pending>();
@@ -119,15 +152,70 @@ export function createSyncClient(options: SyncClientOptions) {
   function callStream(
     tag: string,
     payload: unknown,
-    onChunk: (value: unknown) => void,
-  ): Promise<void> {
+    onChunk: (value: unknown) => void | Promise<void>,
+  ): { readonly ready: Promise<void>; readonly completion: Promise<void> } {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
-      return Promise.reject(new Error("sync socket not connected"));
+      const completion = Promise.reject<void>(new Error("sync socket not connected"));
+      return { ready: completion, completion };
     }
     const id = sendRequest(tag, payload);
-    return new Promise((resolve, reject) => {
-      pending.set(id, { kind: "stream", onChunk, resolve, reject });
+    const streamSocket = socket;
+    let resolveReady!: () => void;
+    let rejectReady!: (error: unknown) => void;
+    let isReady = false;
+    const ready = new Promise<void>((resolve, reject) => {
+      resolveReady = resolve;
+      rejectReady = reject;
     });
+    let resolveCompletion!: () => void;
+    let rejectCompletion!: (error: unknown) => void;
+    const completion = new Promise<void>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    // Some consumers use only completion; keep early readiness failures handled.
+    void ready.catch(() => {});
+    void completion.catch(() => {});
+    let chunkQueue = Promise.resolve();
+    let failed = false;
+    const stream: PendingStream = {
+      kind: "stream",
+      onChunk,
+      resolve: () => {
+        if (!isReady) rejectReady(new Error("stream completed before first chunk"));
+        void chunkQueue.then(() => {
+          if (failed) rejectCompletion(new Error("stream handler failed"));
+          else resolveCompletion();
+        });
+      },
+      reject: (error) => {
+        failed = true;
+        if (!isReady) rejectReady(error);
+        rejectCompletion(error);
+      },
+      markReady: () => {
+        if (isReady) return;
+        isReady = true;
+        resolveReady();
+      },
+      enqueue: (values) => {
+        chunkQueue = chunkQueue
+          .then(async () => {
+            if (failed) return;
+            for (const value of values) await onChunk(value);
+            if (failed) return;
+            sendAck(id);
+          })
+          .catch((error: unknown) => {
+            failed = true;
+            rejectCompletion(error);
+            if (pending.get(id) === stream) pending.delete(id);
+            if (socket === streamSocket) streamSocket?.close();
+          });
+      },
+    };
+    pending.set(id, stream);
+    return { ready, completion };
   }
 
   function failExit(exit: ExitEncoded): Error {
@@ -155,11 +243,13 @@ export function createSyncClient(options: SyncClientOptions) {
     if (tag === "Chunk" && (typeof record.requestId === "string" || typeof record.requestId === "number")) {
       const entry = pending.get(record.requestId);
       if (!entry || entry.kind !== "stream") return;
+      entry.markReady();
       const values = record.values;
       if (Array.isArray(values)) {
-        for (const value of values) entry.onChunk(value);
+        entry.enqueue(values);
+      } else {
+        entry.enqueue([undefined]);
       }
-      sendAck(record.requestId);
       return;
     }
 
@@ -190,7 +280,7 @@ export function createSyncClient(options: SyncClientOptions) {
     if (openPromise) return openPromise;
     options.onStatus("connecting");
 
-    openPromise = (async () => {
+    const attempt = (async () => {
       const token = await options.getToken();
       if (!token) {
         options.onStatus("idle");
@@ -200,16 +290,18 @@ export function createSyncClient(options: SyncClientOptions) {
       url.searchParams.set("token", token);
 
       await new Promise<void>((resolve, reject) => {
-        socket = new WebSocket(url.toString());
-        socket.onopen = () => {
+        const connectedSocket = new WebSocket(url.toString());
+        socket = connectedSocket;
+        connectedSocket.onopen = () => {
           options.onStatus("connected");
           resolve();
         };
-        socket.onerror = () => {
+        connectedSocket.onerror = () => {
           options.onStatus("error");
           reject(new Error("sync socket error"));
         };
-        socket.onclose = () => {
+        connectedSocket.onclose = () => {
+          if (socket !== connectedSocket) return;
           options.onStatus("idle");
           openPromise = null;
           for (const [, entry] of pending) {
@@ -217,7 +309,7 @@ export function createSyncClient(options: SyncClientOptions) {
           }
           pending.clear();
         };
-        socket.onmessage = (message) => {
+        connectedSocket.onmessage = (message) => {
           let parsed: unknown;
           try {
             parsed = JSON.parse(String(message.data));
@@ -229,8 +321,12 @@ export function createSyncClient(options: SyncClientOptions) {
         };
       });
     })();
-
-    return openPromise;
+    const guardedAttempt = attempt.catch((error: unknown) => {
+      if (openPromise === guardedAttempt) openPromise = null;
+      throw error;
+    });
+    openPromise = guardedAttempt;
+    return guardedAttempt;
   }
 
   function disconnect(): void {
@@ -253,18 +349,17 @@ export function createSyncClient(options: SyncClientOptions) {
     readonly events: readonly Event[];
     readonly deviceId: DeviceId | string;
   }): Promise<SyncPushResult> {
-    const result = await callUnary("sync.push", {
+    return unwrapApiResult(api.pushEvents({ body: {
       events: input.events,
       deviceId: input.deviceId,
-    });
-    return result as SyncPushResult;
+    } }));
   }
 
-  async function subscribe(after: number): Promise<void> {
-    await callStream("sync.subscribe", { after }, (value) => {
+  function subscribe(after: number): { readonly ready: Promise<void>; readonly completion: Promise<void> } {
+    return callStream("sync.subscribe", { after }, async (value) => {
       const batch = value as SyncBatch;
       if (batch && Array.isArray(batch.events)) {
-        options.onSyncBatch?.(batch);
+        await options.onSyncBatch?.(batch);
       }
     });
   }
@@ -278,14 +373,36 @@ export function createSyncClient(options: SyncClientOptions) {
     input: ChatSendInput,
     onItem: (item: ChatStreamItem) => void,
   ): Promise<void> {
-    await callStream("chat.send", input, (value) => {
+    const stream = callStream("chat.send", input, (value) => {
       onItem(value as ChatStreamItem);
     });
+    await stream.completion;
   }
 
   async function chatStop(input: ChatStopInput): Promise<{ readonly ok: true }> {
     const result = await callUnary("chat.stop", input);
     return result as { readonly ok: true };
+  }
+
+  async function turnStart(input: TurnStartInput): Promise<TurnReceipt> {
+    return unwrapApiResult(api.startTurn({ body: input }));
+  }
+
+  async function turnGet(input: TurnGetInput): Promise<TurnGetResult> {
+    return unwrapApiResult(api.getTurn({ params: { turnId: input.turnId } }));
+  }
+
+  async function turnStop(input: TurnStopInput): Promise<TurnStopResult> {
+    return unwrapApiResult(api.stopTurn({ params: { turnId: input.turnId }, body: input }));
+  }
+
+  function turnObserve(
+    input: TurnObserveInput,
+    onFrame: (frame: TurnFrame) => void,
+  ): { readonly ready: Promise<void>; readonly completion: Promise<void> } {
+    return callStream("turn.observe", input, (value) => {
+      onFrame(value as TurnFrame);
+    });
   }
 
   async function chatWrapUp(input: ChatWrapUpInput): Promise<ChatWrapUpResult> {
@@ -317,6 +434,10 @@ export function createSyncClient(options: SyncClientOptions) {
     deleteAccount,
     chatSend,
     chatStop,
+    turnStart,
+    turnGet,
+    turnStop,
+    turnObserve,
     chatWrapUp,
     transcribe,
     usageGet,

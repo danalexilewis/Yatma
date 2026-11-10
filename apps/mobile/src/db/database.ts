@@ -13,6 +13,7 @@ import type {
 import { encodeEvent, foldEvents, parseEventLine } from "@yatma/core";
 import type { SQLiteDatabase } from "expo-sqlite";
 import * as SQLite from "expo-sqlite";
+import * as Crypto from "expo-crypto";
 import { Platform } from "react-native";
 
 import {
@@ -29,10 +30,28 @@ import {
   type EntityRow,
   type EventRow,
 } from "./schema";
+import { ensureWebStorageOwner, getDatabaseRuntime } from "./runtime";
 
 const DEVICE_ID_META_KEY = "deviceId";
+const runtime = getDatabaseRuntime();
 
-let databasePromise: Promise<SQLiteDatabase> | null = null;
+/** Serialize every local journal mutation across snapshot, commit, and cache work. */
+export async function withLocalWriteLock<A>(
+  task: (databaseName: string) => Promise<A>,
+): Promise<A> {
+  const databaseName = runtime.activeDatabaseName;
+  const previous = runtime.writeTail;
+  let release!: () => void;
+  runtime.writeTail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await task(databaseName);
+  } finally {
+    release();
+  }
+}
 
 /**
  * Exclusive transactions are native-only on expo-sqlite.
@@ -67,24 +86,59 @@ async function runExclusive(
 }
 
 /** Open (or reuse) the local Yatma database and migrate schema. */
-export async function openDatabase(): Promise<SQLiteDatabase> {
+export async function openDatabase(
+  databaseName = runtime.activeDatabaseName,
+): Promise<SQLiteDatabase> {
+  let databasePromise = runtime.databases.get(databaseName);
   if (!databasePromise) {
-    databasePromise = initDatabase();
+    // Expo initializes one VFS per worker, even across different account files.
+    // Serialize first opens so concurrent consumers cannot initialize it twice.
+    databasePromise = runtime.openTail.then(() => initDatabase(databaseName));
+    runtime.openTail = databasePromise.then(
+      () => {},
+      () => {},
+    );
+    runtime.databases.set(databaseName, databasePromise);
+    const pending = databasePromise;
+    void pending.catch(() => {
+      if (runtime.databases.get(databaseName) === pending) runtime.databases.delete(databaseName);
+    });
   }
   return databasePromise;
 }
 
-async function initDatabase(): Promise<SQLiteDatabase> {
-  const database = await SQLite.openDatabaseAsync(DATABASE_NAME);
-  await database.execAsync(SCHEMA_SQL);
-  const versionRow = await database.getFirstAsync<{ readonly user_version: number }>(
-    "PRAGMA user_version",
-  );
-  const current = versionRow?.user_version ?? 0;
-  if (current < DATABASE_SCHEMA_VERSION) {
-    await database.execAsync(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};`);
+async function initDatabase(databaseName: string): Promise<SQLiteDatabase> {
+  await ensureWebStorageOwner(runtime);
+  const database = await SQLite.openDatabaseAsync(databaseName);
+  try {
+    await database.execAsync(SCHEMA_SQL);
+    const versionRow = await database.getFirstAsync<{ readonly user_version: number }>(
+      "PRAGMA user_version",
+    );
+    const current = versionRow?.user_version ?? 0;
+    if (current < DATABASE_SCHEMA_VERSION) {
+      await database.execAsync(`PRAGMA user_version = ${DATABASE_SCHEMA_VERSION};`);
+    }
+    return database;
+  } catch (error) {
+    await database.closeAsync().catch(() => {});
+    throw error;
   }
-  return database;
+}
+
+/** Select an account-specific database while serializing with pending local writes. */
+export async function selectLocalAccount(accountId: string | null): Promise<void> {
+  const request = ++runtime.accountSelectionGeneration;
+  const databaseName = accountId
+    ? `yatma-${(
+        await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, accountId)
+      ).slice(0, 32)}.db`
+    : DATABASE_NAME;
+  if (request !== runtime.accountSelectionGeneration) return;
+  runtime.activeDatabaseName = databaseName;
+  await withLocalWriteLock(async (selectedName) => {
+    await openDatabase(selectedName);
+  });
 }
 
 function createDeviceId(): string {
@@ -107,39 +161,26 @@ export async function getOrCreateDeviceId(): Promise<string> {
 
 /** Persist an event. Omit `seq` for outbox rows. */
 export async function appendEvent(event: Event): Promise<void> {
-  const database = await openDatabase();
-  const payload = JSON.stringify(event);
-  await database.runAsync(
-    `INSERT OR REPLACE INTO events (id, at, type, payload, seq, device_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    event.id,
-    event.at,
-    event.type,
-    payload,
-    event.seq ?? null,
-    event.by.kind === "user" ? event.by.deviceId : null,
-    Date.now(),
-  );
+  await withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    await database.runAsync(
+      `INSERT INTO events (id, at, type, payload, seq, device_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      event.id,
+      event.at,
+      event.type,
+      eventPayload(event),
+      event.seq ?? null,
+      event.by.kind === "user" ? event.by.deviceId : null,
+      Date.now(),
+    );
+  });
 }
 
 /** Upsert folded entity snapshots (full replace of known kinds). */
 export async function upsertEntities(folded: FoldedEntities): Promise<void> {
-  const database = await openDatabase();
-  const rows = entityRowsFromFolded(folded);
-  await runExclusive(database, async (tx) => {
-    for (const row of rows) {
-      await tx.runAsync(
-        `INSERT INTO entities (kind, id, payload, updated_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(kind, id) DO UPDATE SET
-           payload = excluded.payload,
-           updated_at = excluded.updated_at`,
-        row.kind,
-        row.id,
-        row.payload,
-        row.updatedAt,
-      );
-    }
+  await withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    await runExclusive(database, async (tx) => writeEntityRows(tx, folded));
   });
 }
 
@@ -150,60 +191,113 @@ export async function upsertEntity(
   payload: unknown,
   updatedAt: string,
 ): Promise<void> {
-  const database = await openDatabase();
-  await database.runAsync(
-    `INSERT INTO entities (kind, id, payload, updated_at)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(kind, id) DO UPDATE SET
-       payload = excluded.payload,
-       updated_at = excluded.updated_at`,
-    kind,
-    id,
-    JSON.stringify(payload),
-    updatedAt,
-  );
+  await withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    await database.runAsync(
+      `INSERT INTO entities (kind, id, payload, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(kind, id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
+      kind,
+      id,
+      JSON.stringify(payload),
+      updatedAt,
+    );
+  });
 }
 
 /** Append an event and refresh the entity cache from the new fold. */
 export async function appendEventAndUpsert(
   event: Event,
-  previous: FoldedEntities,
+  _previous: FoldedEntities,
 ): Promise<FoldedEntities> {
-  const next = foldEvents([...previous.events, event]);
-  const database = await openDatabase();
-  await runExclusive(database, async (tx) => {
-    await tx.runAsync(
-      `INSERT OR REPLACE INTO events (id, at, type, payload, seq, device_id, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      event.id,
-      event.at,
-      event.type,
-      JSON.stringify(event),
-      event.seq ?? null,
-      event.by.kind === "user" ? event.by.deviceId : null,
-      Date.now(),
-    );
-    const rows = entityRowsFromFolded(next);
-    for (const row of rows) {
-      await tx.runAsync(
-        `INSERT INTO entities (kind, id, payload, updated_at)
+  return commitLocalBatch([event]);
+}
+
+/** Commit a validated local batch and the projections rebuilt from it atomically. */
+export async function commitLocalBatch(events: readonly Event[]): Promise<FoldedEntities> {
+  return withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    let next!: FoldedEntities;
+    await runExclusive(database, async (tx) => {
+      const eventRows = await tx.getAllAsync<EventRow>(
+        `SELECT id, at, type, payload, seq, device_id, created_at FROM events ORDER BY at ASC, id ASC`,
+      );
+      const existing: Event[] = [];
+      for (const row of eventRows) {
+        const parsed = parseEventLine(row.payload);
+        if (parsed.ok) existing.push(eventWithSequence(parsed.event, row.seq));
+      }
+      const byId = new Map(existing.map((event) => [event.id, event]));
+      const newEvents: Event[] = [];
+      for (const event of events) {
+        const previousEvent = byId.get(event.id);
+        if (previousEvent) {
+          if (!sameEventContent(previousEvent, event))
+            throw new Error(`event conflict: ${event.id}`);
+          continue;
+        }
+        byId.set(event.id, event);
+        newEvents.push(event);
+      }
+      next = foldEvents([...existing, ...newEvents]);
+      for (const event of newEvents) {
+        await tx.runAsync(
+          `INSERT INTO events (id, at, type, payload, seq, device_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          event.id,
+          event.at,
+          event.type,
+          eventPayload(event),
+          event.seq ?? null,
+          event.by.kind === "user" ? event.by.deviceId : null,
+          Date.now(),
+        );
+      }
+      const projectionRows = entityRowsFromFolded(next);
+      for (const row of projectionRows) {
+        await tx.runAsync(
+          `INSERT INTO entities (kind, id, payload, updated_at)
          VALUES (?, ?, ?, ?)
          ON CONFLICT(kind, id) DO UPDATE SET
            payload = excluded.payload,
            updated_at = excluded.updated_at`,
-        row.kind,
-        row.id,
-        row.payload,
-        row.updatedAt,
-      );
-    }
+          row.kind,
+          row.id,
+          row.payload,
+          row.updatedAt,
+        );
+      }
+    });
+    return next;
   });
-  return next;
+}
+
+function eventPayload(event: Event): string {
+  const { seq: _sequence, ...content } = event;
+  return JSON.stringify(content);
+}
+
+function eventWithSequence(event: Event, sequence: number | null): Event {
+  const { seq: _embeddedSequence, ...content } = event;
+  return sequence === null ? (content as Event) : ({ ...content, seq: sequence } as Event);
+}
+
+function sameEventContent(left: Event, right: Event): boolean {
+  const { seq: _leftSeq, ...leftContent } = left;
+  const { seq: _rightSeq, ...rightContent } = right;
+  return canonicalJson(leftContent) === canonicalJson(rightContent);
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (typeof value === "object" && value !== null) {
+    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 /** Load cached entity maps, or null when the cache is empty. */
-export async function loadCachedEntities(): Promise<CachedEntityMaps | null> {
-  const database = await openDatabase();
+export async function loadCachedEntities(databaseName?: string): Promise<CachedEntityMaps | null> {
+  const database = await openDatabase(databaseName);
   const rows = await database.getAllAsync<EntityRow>(
     `SELECT kind, id, payload, updated_at FROM entities`,
   );
@@ -246,39 +340,48 @@ export type HydratedLocalState = {
   readonly lastSeenAt: string | null;
 };
 
+export type LocalCursorUpdate = { readonly key: string; readonly after: number };
+
 /**
  * Cold start: prefer entity cache when present, otherwise fold the event log.
  * Backfills the cache when folding from events.
  */
 export async function hydrateLocalState(): Promise<HydratedLocalState> {
-  await openDatabase();
-  const deviceId = await getOrCreateDeviceId();
-  const events = await loadAllEvents();
-  const cached = await loadCachedEntities();
-
-  if (cached) {
-    const folded = foldedFromCache(cached, events);
-    return {
-      folded,
-      deviceId,
-      lastSeenAt: lastSeenAtFromEvents(events),
-    };
-  }
-
-  const folded = foldEvents(events);
-  if (events.length > 0) {
-    await upsertEntities(folded);
-  }
-  return {
-    folded,
-    deviceId,
-    lastSeenAt: lastSeenAtFromEvents(events),
-  };
+  return withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    const meta = await database.getFirstAsync<{ readonly value: string }>(
+      `SELECT value FROM sync_meta WHERE key = ?`,
+      DEVICE_ID_META_KEY,
+    );
+    const storedDeviceId = meta?.value ?? null;
+    const deviceId = storedDeviceId ?? createDeviceId();
+    if (!storedDeviceId) {
+      await database.runAsync(
+        `INSERT INTO sync_meta (key, value) VALUES (?, ?)`,
+        DEVICE_ID_META_KEY,
+        deviceId,
+      );
+    }
+    const events = await loadAllEvents(databaseName);
+    const cached = await loadCachedEntities(databaseName);
+    if (cached) {
+      return {
+        folded: foldedFromCache(cached, events),
+        deviceId,
+        lastSeenAt: lastSeenAtFromEvents(events),
+      };
+    }
+    const folded = foldEvents(events);
+    if (events.length > 0) {
+      await runExclusive(database, async (tx) => writeEntityRows(tx, folded));
+    }
+    return { folded, deviceId, lastSeenAt: lastSeenAtFromEvents(events) };
+  });
 }
 
 /** Load all events ordered for folding. */
-export async function loadAllEvents(): Promise<Event[]> {
-  const database = await openDatabase();
+export async function loadAllEvents(databaseName?: string): Promise<Event[]> {
+  const database = await openDatabase(databaseName);
   const rows = await database.getAllAsync<EventRow>(
     `SELECT id, at, type, payload, seq, device_id, created_at
      FROM events
@@ -287,7 +390,7 @@ export async function loadAllEvents(): Promise<Event[]> {
   const events: Event[] = [];
   for (const row of rows) {
     const parsed = parseEventLine(row.payload);
-    if (parsed.ok) events.push(parsed.event);
+    if (parsed.ok) events.push(eventWithSequence(parsed.event, row.seq));
   }
   return events;
 }
@@ -304,62 +407,177 @@ export async function loadOutboxEvents(): Promise<Event[]> {
   const events: Event[] = [];
   for (const row of rows) {
     const parsed = parseEventLine(row.payload);
-    if (parsed.ok) events.push(parsed.event);
+    if (parsed.ok) events.push(eventWithSequence(parsed.event, row.seq));
   }
   return events;
 }
 
 /** Stamp server sequence onto a previously local event. */
 export async function assignEventSeq(eventId: string, seq: number): Promise<void> {
-  const database = await openDatabase();
-  await database.runAsync(`UPDATE events SET seq = ? WHERE id = ?`, seq, eventId);
+  await acknowledgeEvents([{ id: eventId, seq }]);
+}
+
+/** Add authoritative sequence assignments without changing immutable event content. */
+export async function acknowledgeEvents(
+  assignments: readonly { readonly id: string; readonly seq: number }[],
+): Promise<void> {
+  for (const assignment of assignments) {
+    if (!Number.isSafeInteger(assignment.seq) || assignment.seq <= 0) {
+      throw new Error(`invalid sequence assignment for event ${assignment.id}`);
+    }
+  }
+  await withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    await runExclusive(database, async (tx) => {
+      for (const assignment of assignments) {
+        const row = await tx.getFirstAsync<EventRow>(
+          `SELECT id, at, type, payload, seq, device_id, created_at FROM events WHERE id = ?`,
+          assignment.id,
+        );
+        if (!row) continue;
+        if (row.seq !== null && row.seq !== assignment.seq) {
+          throw new Error(`sequence conflict for event ${assignment.id}`);
+        }
+        const parsed = parseEventLine(row.payload);
+        if (!parsed.ok) throw new Error(`invalid stored event ${assignment.id}`);
+        await tx.runAsync(`UPDATE events SET seq = ? WHERE id = ?`, assignment.seq, assignment.id);
+      }
+    });
+  });
 }
 
 /** Merge remote events (idempotent by id) and refresh entity cache. */
 export async function upsertRemoteEvents(events: readonly Event[]): Promise<FoldedEntities> {
-  const database = await openDatabase();
-  await runExclusive(database, async (tx) => {
-    for (const event of events) {
-      await tx.runAsync(
-        `INSERT INTO events (id, at, type, payload, seq, device_id, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           seq = COALESCE(excluded.seq, events.seq),
-           payload = excluded.payload`,
-        event.id,
-        event.at,
-        event.type,
-        JSON.stringify(event),
-        event.seq ?? null,
-        event.by.kind === "user" ? event.by.deviceId : null,
-        Date.now(),
-      );
+  return mergeRemoteBatch(events);
+}
+
+/** Atomically merge remote rows, rebuild projections, and optionally advance the cursor. */
+export async function mergeRemoteBatch(
+  events: readonly Event[],
+  cursor?: LocalCursorUpdate,
+): Promise<FoldedEntities> {
+  if (cursor && (!Number.isSafeInteger(cursor.after) || cursor.after < 0)) {
+    throw new Error("invalid remote cursor");
+  }
+  for (const event of events) {
+    if (event.seq !== undefined && (!Number.isSafeInteger(event.seq) || event.seq <= 0)) {
+      throw new Error(`invalid sequence for event ${event.id}`);
     }
+  }
+  return withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    let folded!: FoldedEntities;
+    await runExclusive(database, async (tx) => {
+      for (const event of events) {
+        const stored = await tx.getFirstAsync<EventRow>(
+          `SELECT id, at, type, payload, seq, device_id, created_at FROM events WHERE id = ?`,
+          event.id,
+        );
+        if (stored) {
+          const parsed = parseEventLine(stored.payload);
+          if (!parsed.ok || !sameEventContent(parsed.event, event)) {
+            throw new Error(`event conflict: ${event.id}`);
+          }
+          if (stored.seq !== null && event.seq !== undefined && stored.seq !== event.seq) {
+            throw new Error(`sequence conflict for event ${event.id}`);
+          }
+          const sequence = event.seq ?? stored.seq;
+          await tx.runAsync(`UPDATE events SET seq = ? WHERE id = ?`, sequence ?? null, event.id);
+        } else {
+          await tx.runAsync(
+            `INSERT INTO events (id, at, type, payload, seq, device_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            event.id,
+            event.at,
+            event.type,
+            eventPayload(event),
+            event.seq ?? null,
+            event.by.kind === "user" ? event.by.deviceId : null,
+            Date.now(),
+          );
+        }
+      }
+      const rows = await tx.getAllAsync<EventRow>(
+        `SELECT id, at, type, payload, seq, device_id, created_at FROM events ORDER BY at ASC, id ASC`,
+      );
+      const all: Event[] = [];
+      for (const row of rows) {
+        const parsed = parseEventLine(row.payload);
+        if (parsed.ok) all.push(eventWithSequence(parsed.event, row.seq));
+      }
+      folded = foldEvents(all);
+      await writeEntityRows(tx, folded);
+      if (cursor) {
+        const current = await tx.getFirstAsync<{ readonly value: string }>(
+          `SELECT value FROM sync_meta WHERE key = ?`,
+          cursor.key,
+        );
+        const currentAfter = Number(current?.value ?? 0);
+        await tx.runAsync(
+          `INSERT INTO sync_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+          cursor.key,
+          String(Math.max(Number.isFinite(currentAfter) ? currentAfter : 0, cursor.after)),
+        );
+      }
+    });
+    return folded;
   });
-  const all = await loadAllEvents();
-  const folded = foldEvents(all);
-  await upsertEntities(folded);
-  return folded;
+}
+
+async function writeEntityRows(tx: SQLiteDatabase, folded: FoldedEntities): Promise<void> {
+  for (const row of entityRowsFromFolded(folded)) {
+    await tx.runAsync(
+      `INSERT INTO entities (kind, id, payload, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(kind, id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at`,
+      row.kind,
+      row.id,
+      row.payload,
+      row.updatedAt,
+    );
+  }
 }
 
 /** Export every event as JSONL (one object per line). */
 export async function exportEventsJsonl(): Promise<string> {
   const events = await loadAllEvents();
-  return events.map((event) => encodeEvent(event).trimEnd()).join("\n") + (events.length ? "\n" : "");
+  return (
+    events.map((event) => encodeEvent(event).trimEnd()).join("\n") + (events.length ? "\n" : "")
+  );
 }
 
-/** Wipe local log and entity cache (sign-out / delete account). Keeps deviceId. */
+/** Wipe the selected account's local log and cache. Keeps its device and dictation preference. */
 export async function wipeLocalData(): Promise<void> {
-  const database = await openDatabase();
-  const deviceId = await getSyncMeta(DEVICE_ID_META_KEY);
-  await database.execAsync(`
-    DELETE FROM events;
-    DELETE FROM entities;
-    DELETE FROM sync_meta;
-  `);
-  if (deviceId) {
-    await setSyncMeta(DEVICE_ID_META_KEY, deviceId);
-  }
+  await withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    const deviceRow = await database.getFirstAsync<{ readonly value: string }>(
+      `SELECT value FROM sync_meta WHERE key = ?`,
+      DEVICE_ID_META_KEY,
+    );
+    const autoSendRow = await database.getFirstAsync<{ readonly value: string }>(
+      `SELECT value FROM sync_meta WHERE key = ?`,
+      "preference.autoSendDictation",
+    );
+    const deviceId = deviceRow?.value ?? null;
+    const autoSendDictation = autoSendRow?.value ?? null;
+    await runExclusive(database, async (tx) => {
+      await tx.runAsync(`DELETE FROM events`);
+      await tx.runAsync(`DELETE FROM entities`);
+      await tx.runAsync(`DELETE FROM sync_meta`);
+      if (deviceId) {
+        await tx.runAsync(
+          `INSERT INTO sync_meta (key, value) VALUES (?, ?)`,
+          DEVICE_ID_META_KEY,
+          deviceId,
+        );
+      }
+      if (autoSendDictation !== null) {
+        await tx.runAsync(
+          `INSERT INTO sync_meta (key, value) VALUES (?, ?)`,
+          "preference.autoSendDictation",
+          autoSendDictation,
+        );
+      }
+    });
+  });
 }
 
 export async function getSyncMeta(key: string): Promise<string | null> {
@@ -372,11 +590,12 @@ export async function getSyncMeta(key: string): Promise<string | null> {
 }
 
 export async function setSyncMeta(key: string, value: string): Promise<void> {
-  const database = await openDatabase();
-  await database.runAsync(
-    `INSERT INTO sync_meta (key, value) VALUES (?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-    key,
-    value,
-  );
+  await withLocalWriteLock(async (databaseName) => {
+    const database = await openDatabase(databaseName);
+    await database.runAsync(
+      `INSERT INTO sync_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      key,
+      value,
+    );
+  });
 }

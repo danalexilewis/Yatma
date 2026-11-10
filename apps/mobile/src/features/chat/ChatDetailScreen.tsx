@@ -1,20 +1,31 @@
-import { LegendList } from "@legendapp/list/react-native";
-import type { ChatMessage, ChatStreamItem, Event } from "@yatma/core";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import type { BatchCommand, ChatStreamItem, Event, ProjectId } from "@yatma/core";
+import { generateShortId, PERSONAL_THREAD_ID } from "@yatma/core";
+import { useGlobalSearchParams, useRouter } from "expo-router";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { ChangeCard } from "./ChangeCard";
 import { summarizeChangeEvents } from "./changeSummary";
+import type { ComposerMode } from "./composerInput";
 import { MessageWithRefs } from "./RefUnfurl";
-import { eventsFromUndoPlan } from "./undoBatch";
-import { dictateFromMic } from "../dictation";
-import { useAppStore, useFoldedState } from "../../state/atoms";
-import { selectChat } from "../../state/selectors";
-import { sendChatTurn, stopChatTurn, wrapUpChat } from "../../sync/chatClient";
+import { TaskThread, TaskThreadSummary } from "./TaskThread";
+import { ThreadComposer } from "./ThreadComposer";
+import { CaptureSheet } from "../capture/CaptureSheet";
+import { consumeCaptureOpen, subscribeCaptureOpen } from "../capture/captureIntent";
+import { useDictation } from "../dictation";
+import { getAutoSendDictation } from "../settings/autoSendPreference";
+import { useAppStore } from "../../state/atoms";
+import {
+  findActiveChatTurn,
+  resumeChatTurn,
+  sendChatTurn,
+  stopChatTurn,
+  wrapUpChat,
+} from "../../sync/chatClient";
 import { getSyncEngine } from "../../sync/engine";
 import { useTheme } from "../../theme/theme";
-import { Composer, Screen } from "../../ui";
+import { Screen, ScreenHeader } from "../../ui";
+import { UndoReasonDialog } from "../../ui/UndoReasonDialog";
 
 type LiveChange = {
   readonly batchId: string;
@@ -22,296 +33,383 @@ type LiveChange = {
   readonly summaryLabel: string;
 };
 
-const SUGGESTIONS = ["What's on now?", "Clear my inbox"] as const;
-
-/** Single chat thread — or a blank new thread when id is `new`. */
+/** The app's permanent thread. Current tasks are its default reading position. */
 export function ChatDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const isNew = id === "new";
-  const navigation = useNavigation();
+  const {
+    taskId,
+    pageId,
+    projectId: discussedProjectId,
+  } = useGlobalSearchParams<{ taskId?: string; pageId?: string; projectId?: string }>();
   const router = useRouter();
   const theme = useTheme();
-  const folded = useFoldedState();
   const store = useAppStore();
-  const chat = !isNew && id ? selectChat(folded, id) : undefined;
+  const dictation = useDictation();
   const [draft, setDraft] = useState("");
+  const [projectId, setProjectId] = useState<ProjectId | null>(null);
+  const [composerMode, setComposerMode] = useState<ComposerMode>("message");
+  const [tasksCollapsed, setTasksCollapsed] = useState(false);
+  const [stickyTaskSummaryVisible, setStickyTaskSummaryVisible] = useState(false);
+  const [returnToPriorityRequest, setReturnToPriorityRequest] = useState(0);
+  const [captureOpen, setCaptureOpen] = useState(false);
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
   const [turnId, setTurnId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveChange, setLiveChange] = useState<LiveChange | null>(null);
-  const [activeChatId, setActiveChatId] = useState<string | null>(isNew ? null : id ?? null);
+  const [undoDialogOpen, setUndoDialogOpen] = useState(false);
+  const composerSubmit = useRef<((text: string) => Promise<void>) | null>(null);
+  const observedTurnIds = useRef(new Set<string>());
+  const chat = store.state.folded.chats.get(PERSONAL_THREAD_ID);
+
+  useEffect(() => {
+    setTasksCollapsed(false);
+    setStickyTaskSummaryVisible(false);
+  }, [store.state.accountId]);
+
+  useEffect(() => {
+    function openIfPending() {
+      if (consumeCaptureOpen()) setCaptureOpen(true);
+    }
+    openIfPending();
+    return subscribeCaptureOpen(openIfPending);
+  }, []);
+
+  useEffect(() => {
+    if (!store.state.ready || (!taskId && !pageId && !discussedProjectId)) return;
+    const task = [...store.state.folded.tasks.values()].find((item) => item.id === taskId);
+    const page = [...store.state.folded.pages.values()].find((item) => item.id === pageId);
+    const discussedProject = [...store.state.folded.projects.values()].find(
+      (item) => item.id === discussedProjectId,
+    );
+    if (task) setDraft(`About [${task.title}](task:${task.id}): `);
+    else if (page) setDraft(`About [${page.title}](page:${page.id}): `);
+    else if (discussedProject)
+      setDraft(`About project ${discussedProject.title} (${discussedProject.id}): `);
+    else return;
+    setComposerMode("message");
+    router.setParams({ taskId: undefined, pageId: undefined, projectId: undefined });
+  }, [taskId, pageId, discussedProjectId, store.state.ready]);
+
+  function applyTurnItem(item: ChatStreamItem) {
+    if (item.kind === "started") {
+      observedTurnIds.current.add(item.turnId);
+      setTurnId(item.turnId);
+    }
+    if (item.kind === "text_delta") setStreaming((prev) => prev + item.text);
+    if (item.kind === "changes") {
+      void store
+        .mergeRemoteEvents(item.events)
+        .catch((cause: unknown) =>
+          setError(cause instanceof Error ? cause.message : "Could not save the changes."),
+        );
+      setLiveChange({ batchId: item.batchId, events: item.events, summaryLabel: item.summary });
+    }
+    if (item.kind === "done") {
+      setTurnId(null);
+    }
+  }
+
+  useEffect(() => {
+    if (
+      streaming &&
+      chat?.messages.some((message) => message.role === "assistant" && message.text === streaming)
+    ) {
+      setStreaming("");
+    }
+  }, [chat?.messages, streaming]);
+
+  useEffect(() => {
+    if (!store.state.ready) return;
+    let current = true;
+    observedTurnIds.current.clear();
+    async function recover() {
+      try {
+        const activeTurnId = await findActiveChatTurn(PERSONAL_THREAD_ID);
+        if (!current || !activeTurnId || observedTurnIds.current.has(activeTurnId)) return;
+        setTasksCollapsed(true);
+        setBusy(true);
+        setError(null);
+        setStreaming("");
+        setLiveChange(null);
+        await resumeChatTurn({
+          chatId: PERSONAL_THREAD_ID,
+          handlers: {
+            onItem: (item) => {
+              if (current) applyTurnItem(item);
+            },
+            onError: (cause) => {
+              if (current) setError(cause instanceof Error ? cause.message : String(cause));
+            },
+          },
+        });
+      } catch (cause) {
+        if (current) setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        if (current) {
+          setBusy(false);
+          setTurnId(null);
+        }
+      }
+    }
+    void recover();
+    return () => {
+      current = false;
+    };
+  }, [store.state.ready, store.state.accountId]);
 
   async function onWrapUp() {
-    if (!activeChatId) return;
     setBusy(true);
+    setError(null);
     try {
-      const result = await wrapUpChat(activeChatId);
+      const result = await wrapUpChat(PERSONAL_THREAD_ID);
       if (result?.events?.length) {
-        store.mergeRemoteEvents(result.events);
+        await store.mergeRemoteEvents(result.events);
         setLiveChange({
           batchId: result.batchId,
           events: result.events,
           summaryLabel: "Handbook updated",
         });
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
   }
 
-  useEffect(() => {
-    const showWrapUp = Boolean(activeChatId) && !isNew;
-    navigation.setOptions({
-      headerShown: true,
-      title: chat?.title ?? (isNew ? "New chat" : "Chat"),
-      headerRight: showWrapUp
-        ? () => (
-            <Pressable
-              onPress={() => void onWrapUp()}
-              disabled={busy}
-              hitSlop={8}
-              style={{ opacity: busy ? 0.5 : 1 }}
-            >
-              <Text style={{ color: theme.colors.pine, fontWeight: "600", paddingHorizontal: 8 }}>
-                Wrap up
-              </Text>
-            </Pressable>
-          )
-        : undefined,
-    });
-  }, [navigation, chat?.title, isNew, activeChatId, busy, theme.colors.pine]);
-
-  if (!isNew && (!chat || !id)) {
-    return (
-      <Screen edges={["bottom"]}>
-        <View style={styles.centered}>
-          <Text style={{ color: theme.colors.muted }}>Chat not found</Text>
-        </View>
-      </Screen>
-    );
+  async function onMic() {
+    if (busy || dictation.transcribing) return;
+    dictation.clearError();
+    setError(null);
+    try {
+      const engine = getSyncEngine();
+      const result = await dictation.toggle(
+        engine ? (method, payload) => engine.client.callRpc(method, payload) : undefined,
+      );
+      if (!result) return;
+      if (!result.text.trim()) {
+        setError("No speech was transcribed. Check microphone access and try again.");
+        return;
+      }
+      let autoSend = false;
+      try {
+        autoSend = await getAutoSendDictation();
+      } catch {
+        setError("Could not read the auto-send setting. The transcript is available to edit.");
+      }
+      if (autoSend && composerSubmit.current) await composerSubmit.current(result.text);
+      else setDraft((prev) => (prev ? `${prev} ${result.text}` : result.text));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Dictation failed. Try again.");
+    }
   }
 
-  const messages: ChatMessage[] = chat ? [...chat.messages] : [];
-  const empty = messages.length === 0 && !streaming;
-
-  async function onMicHold() {
-    const engine = getSyncEngine();
-    const result = await dictateFromMic({
-      callRpc: engine ? (method, payload) => engine.client.callRpc(method, payload) : undefined,
+  async function onSend(text: string) {
+    if (busy) return;
+    const messageId = generateShortId("c_");
+    const commands: BatchCommand[] = [];
+    if (!chat)
+      commands.push({
+        type: "chat.create",
+        chatId: PERSONAL_THREAD_ID,
+        input: { projectId: null, title: "My thread" },
+      });
+    commands.push({
+      type: "chat.message",
+      chatId: PERSONAL_THREAD_ID,
+      messageId,
+      role: "user",
+      text,
     });
-    if (result.text) setDraft((prev) => (prev ? `${prev} ${result.text}` : result.text));
-  }
-
-  async function onSend(textOverride?: string) {
-    const text = (textOverride ?? draft).trim();
-    if (!text || busy) return;
-    setDraft("");
+    // Save the message before clearing the composer or starting network work.
+    await store.executeLocalCommands(commands);
+    setTasksCollapsed(true);
+    setDraft((current) => (current.trim() === text ? "" : current));
     setBusy(true);
     setError(null);
     setStreaming("");
     setLiveChange(null);
+    if (!getSyncEngine()) {
+      setError("Message saved. Connect to chat with Yatma.");
+      setBusy(false);
+      return;
+    }
     try {
       await sendChatTurn({
-        chatId: activeChatId ?? undefined,
-        projectId: chat?.projectId ?? null,
+        chatId: PERSONAL_THREAD_ID,
+        projectId: null,
+        messageId,
         text,
-        handlers: {
-          onItem: (item: ChatStreamItem) => {
-            if (item.kind === "started") {
-              setTurnId(item.turnId);
-              if (item.chatId) {
-                setActiveChatId(item.chatId);
-                if (isNew) {
-                  router.replace(`/chat/${item.chatId}`);
-                }
-              }
-            }
-            if (item.kind === "text_delta") {
-              setStreaming((prev) => prev + item.text);
-            }
-            if (item.kind === "changes") {
-              store.mergeRemoteEvents(item.events);
-              setLiveChange({
-                batchId: item.batchId,
-                events: item.events,
-                summaryLabel: item.summary,
-              });
-            }
-            if (item.kind === "done") setTurnId(null);
-          },
-          onError: (err) => {
-            setError(err instanceof Error ? err.message : String(err));
-          },
-        },
+        handlers: { onItem: applyTurnItem },
       });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    } catch (cause) {
+      setError(
+        `Message saved. ${cause instanceof Error ? cause.message : "Could not reach Yatma. Try again when connected."}`,
+      );
     } finally {
       setBusy(false);
     }
   }
 
   async function onStop() {
-    if (!activeChatId) return;
-    await stopChatTurn({ chatId: activeChatId, turnId: turnId ?? undefined });
-    setBusy(false);
-    setTurnId(null);
+    try {
+      await stopChatTurn({ chatId: PERSONAL_THREAD_ID, turnId: turnId ?? undefined });
+      setBusy(false);
+      setTurnId(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not stop this turn.");
+    }
   }
 
-  async function onUndo() {
+  async function onUndo(reason: string) {
     if (!liveChange) return;
-    const undoEvents = eventsFromUndoPlan({
-      batchId: liveChange.batchId,
-      batchEvents: liveChange.events,
-      folded: store.state.folded,
-      deviceId: store.state.deviceId,
-    });
-    for (const event of undoEvents) {
-      await store.dispatchLocalEvent(event);
+    try {
+      const result = await store.undoBatch(liveChange.batchId, liveChange.events, reason);
+      setLiveChange(null);
+      setUndoDialogOpen(false);
+      if (result.skipped.length)
+        setError(`${result.skipped.length} changes were preserved because they changed later.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      throw cause;
     }
-    setLiveChange(null);
   }
 
   return (
-    <Screen edges={[]}>
-      <LegendList
-        data={messages}
-        keyExtractor={(item: ChatMessage) => item.id}
-        estimatedItemSize={64}
-        style={styles.list}
-        contentContainerStyle={{
-          paddingHorizontal: theme.space.screenX,
-          paddingTop: 12,
-          paddingBottom: 12,
-          flexGrow: 1,
-        }}
-        recycleItems
-        ListEmptyComponent={
-          empty ? (
-            <View style={styles.suggestions}>
-              <Text
-                style={{
-                  color: theme.colors.muted,
-                  fontSize: theme.type.row,
-                  textAlign: "center",
-                  marginBottom: 16,
-                }}
-              >
-                Ask about your tasks, or try a suggestion.
-              </Text>
-              {SUGGESTIONS.map((suggestion) => (
+    <Screen>
+      <View style={styles.header}>
+        <ScreenHeader
+          title="Your thread"
+          trailing={
+            <>
+              {chat ? (
                 <Pressable
-                  key={suggestion}
-                  onPress={() => void onSend(suggestion)}
-                  style={[
-                    styles.suggestion,
-                    {
-                      borderColor: theme.colors.line,
-                      backgroundColor: theme.colors.surface,
-                    },
-                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Wrap up conversation"
+                  accessibilityState={{ disabled: busy }}
+                  disabled={busy}
+                  onPress={() => void onWrapUp()}
+                  style={[styles.wrapUp, { backgroundColor: theme.colors.pine, opacity: busy ? 0.5 : 1 }]}
                 >
-                  <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
-                    {suggestion}
+                  <Text style={{ color: theme.colors.onPine, fontSize: 14, fontWeight: "700" }}>
+                    Wrap up
                   </Text>
                 </Pressable>
-              ))}
-            </View>
-          ) : null
-        }
-        renderItem={({ item }: { item: ChatMessage }) => (
-          <View
-            style={[
-              styles.bubble,
-              item.role === "user"
-                ? {
-                    alignSelf: "flex-end",
-                    backgroundColor: theme.colors.pine,
-                    maxWidth: "85%",
-                  }
-                : {
-                    alignSelf: "stretch",
-                    backgroundColor: "transparent",
-                    maxWidth: "100%",
-                    paddingHorizontal: 0,
-                  },
-            ]}
-          >
-            {item.role === "user" ? (
-              <Text style={{ color: theme.colors.onPine, fontSize: theme.type.row }}>
-                {item.text}
+              ) : null}
+            </>
+          }
+        />
+      </View>
+      <TaskThread
+        key={store.state.accountId ?? "offline"}
+        collapsed={tasksCollapsed}
+        onCollapse={() => setTasksCollapsed(true)}
+        onStickySummaryChange={setStickyTaskSummaryVisible}
+        returnToPriorityRequest={returnToPriorityRequest}
+        onChooseProject={(value) => {
+          setProjectId(value);
+          setComposerMode("task");
+        }}
+        footer={
+          <>
+            {streaming ? (
+              <View style={styles.progress}>
+                <MessageWithRefs text={streaming} taskLinksOnly />
+              </View>
+            ) : busy ? (
+              <Text style={{ color: theme.colors.muted, fontSize: 13, paddingVertical: 10 }}>
+                Yatma is thinking…
               </Text>
-            ) : (
-              <MessageWithRefs text={item.text} />
-            )}
-          </View>
-        )}
+            ) : null}
+            {liveChange ? (
+              <View style={styles.progress}>
+                <ChangeCard
+                  summary={summarizeChangeEvents(liveChange.events, [
+                    { label: liveChange.summaryLabel },
+                  ])}
+                  onUndo={() => setUndoDialogOpen(true)}
+                />
+              </View>
+            ) : null}
+          </>
+        }
       />
-
-      {streaming ? (
-        <View style={{ paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
-          <MessageWithRefs text={streaming} />
-        </View>
-      ) : null}
-      {liveChange ? (
-        <View style={{ paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
-          <ChangeCard
-            summary={summarizeChangeEvents(liveChange.events, [
-              { label: liveChange.summaryLabel },
-            ])}
-            onUndo={() => void onUndo()}
-          />
-        </View>
-      ) : null}
-      {error ? (
-        <Text
-          style={{
-            color: theme.colors.danger,
-            fontSize: theme.type.meta,
-            paddingHorizontal: theme.space.screenX,
-            marginBottom: 8,
+      <View style={styles.status}>
+        {error ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.colors.danger, fontSize: theme.type.meta }}
+          >
+            {error}
+          </Text>
+        ) : null}
+        {dictation.error ? (
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.colors.danger, fontSize: theme.type.meta }}
+          >
+            {dictation.error}
+          </Text>
+        ) : null}
+        {dictation.recording ? (
+          <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta }}>
+            Recording {Math.floor(dictation.durationMillis / 1000)}s. Tap the microphone to stop.
+          </Text>
+        ) : null}
+        {dictation.transcribing ? (
+          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>
+            Transcribing recording…
+          </Text>
+        ) : null}
+      </View>
+      {tasksCollapsed || stickyTaskSummaryVisible ? (
+        <TaskThreadSummary
+          onExpand={() => {
+            if (tasksCollapsed) setTasksCollapsed(false);
+            else setReturnToPriorityRequest((request) => request + 1);
           }}
-        >
-          {error}
-        </Text>
+        />
       ) : null}
-
-      <Composer
+      <ThreadComposer
         value={draft}
         onChangeText={setDraft}
-        placeholder="Message…"
-        onSend={() => void onSend()}
-        onMic={() => void onMicHold()}
+        projectId={projectId}
+        onProjectChange={setProjectId}
+        mode={composerMode}
+        onModeChange={setComposerMode}
+        onMessage={onSend}
+        onMic={() => void onMic()}
         busy={busy}
         onStop={() => void onStop()}
-        autoFocus={isNew}
+        tabBarPad
+        submitRef={composerSubmit}
+      />
+      <CaptureSheet
+        visible={captureOpen}
+        onClose={() => setCaptureOpen(false)}
+        onSend={() => {
+          setCaptureOpen(false);
+          setTasksCollapsed(true);
+        }}
+      />
+      <UndoReasonDialog
+        visible={undoDialogOpen}
+        onCancel={() => setUndoDialogOpen(false)}
+        onSubmit={onUndo}
       />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  list: { flex: 1 },
-  bubble: {
-    marginBottom: 10,
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  suggestions: {
-    flex: 1,
+  header: { width: "100%", maxWidth: 760, alignSelf: "center" },
+  wrapUp: {
+    minHeight: 42,
     justifyContent: "center",
-    paddingVertical: 40,
-    gap: 10,
+    alignItems: "center",
+    paddingHorizontal: 18,
+    borderRadius: 24,
   },
-  suggestion: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-  },
+  status: { width: "100%", maxWidth: 760, alignSelf: "center", paddingHorizontal: 16, gap: 6 },
+  progress: { paddingVertical: 12 },
 });

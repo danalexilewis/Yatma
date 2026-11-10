@@ -7,14 +7,18 @@
     "node": "^24"
   },
   "scripts": {
+    "dev": "pnpm --filter @yatma/mobile dev",
+    "dev:web": "BROWSER=none pnpm --filter @yatma/mobile dev --web",
     "test": "vp test run",
     "typecheck": "pnpm -r run typecheck",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
     "fmt": "vp fmt"
   },
   "devDependencies": {
     "typescript": "catalog:",
     "vite-plus": "catalog:",
     "@effect/vitest": "catalog:",
-    "@types/node": "catalog:"
+    "@types/node": "catalog:",
+    "happy-dom": "^21.0.1"
   }
 }

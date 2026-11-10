@@ -27,6 +27,7 @@ export function EmptyState(props: EmptyStateProps) {
       {props.actionLabel && props.onAction ? (
         <Pressable
           onPress={props.onAction}
+          accessibilityRole="button"
           style={({ pressed }) => [
             styles.action,
             {
