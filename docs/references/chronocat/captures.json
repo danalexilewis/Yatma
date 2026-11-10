@@ -1,0 +1,92 @@
+[
+  {
+    "file": "01-planner-empty.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "02-routine-editor.png",
+    "url": "https://chronocat.app/edit-routine/2026-11-10T01:13:32.850",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "03-routines-list.png",
+    "url": "https://chronocat.app/routine",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "04-recurring.png",
+    "url": "https://chronocat.app/recurring-tasks",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "06-recurring-editor.png",
+    "url": "https://chronocat.app/recurring-tasks",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "07-duration-picker.png",
+    "url": "https://chronocat.app/recurring-tasks",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "08-action-menu.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "09-create-block.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "10-daily-stack.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "12-settings.png",
+    "url": "https://chronocat.app/settings",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "15-mind-dump.png",
+    "url": "https://chronocat.app/mind-dump",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "16-mind-dump-inline-entry.png",
+    "url": "https://chronocat.app/mind-dump",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "17-recurring-view.png",
+    "url": "https://chronocat.app/recurring-tasks",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "18-routines-view.png",
+    "url": "https://chronocat.app/routine",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "19-fullscreen-player.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "20-scene-chooser.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "21-alternate-scene.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  },
+  {
+    "file": "22-break-entry-draft.png",
+    "url": "https://chronocat.app/planner",
+    "captured": "2026-11-10"
+  }
+]
