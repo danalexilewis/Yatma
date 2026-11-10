@@ -17,15 +17,44 @@ function resolveSyncUrl(): string | null {
 }
 
 function SyncBridge(props: { readonly children: ReactNode }) {
-  const { getToken, isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });
-  const { mergeRemoteEvents, state } = useAppStore();
+  const { getToken, isLoaded, isSignedIn, sessionId, userId } = useAuth({
+    treatPendingAsSignedOut: false,
+  });
+  const { mergeRemoteEvents, state, switchLocalAccount } = useAppStore();
   const setSyncStatus = useSetSyncStatus();
   const engineRef = useRef<SyncEngine | null>(null);
+  const accountRequestRef = useRef<string | null>(null);
+  const sessionKey = isSignedIn
+    ? `${userId ?? ""}\u0000${sessionId ?? ""}\u0000${state.deviceId}\u0000${state.ready}`
+    : "signed-out";
+  const sessionGenerationRef = useRef({ key: sessionKey, generation: 0 });
+  if (sessionGenerationRef.current.key !== sessionKey) {
+    sessionGenerationRef.current = {
+      key: sessionKey,
+      generation: sessionGenerationRef.current.generation + 1,
+    };
+  }
+  const getTokenRef = useRef(getToken);
+  const mergeRemoteEventsRef = useRef(mergeRemoteEvents);
+  getTokenRef.current = getToken;
+  mergeRemoteEventsRef.current = mergeRemoteEvents;
+
+  const accountId = isSignedIn ? userId ?? null : null;
+  useEffect(() => {
+    if (!isLoaded || (isSignedIn && !userId)) return;
+    if (state.accountId === accountId && state.ready) return;
+    const requestKey = accountId ?? "anonymous";
+    if (accountRequestRef.current === requestKey) return;
+    accountRequestRef.current = requestKey;
+    void switchLocalAccount(accountId).catch((error) => {
+      console.error("Local account switch failed", error);
+    });
+  }, [accountId, isLoaded, isSignedIn, state.accountId, state.ready, switchLocalAccount, userId]);
 
   useEffect(() => {
     if (!isLoaded) return;
 
-    if (!isSignedIn || !state.ready) {
+    if (!isSignedIn || !userId || !state.ready || state.accountId !== userId) {
       engineRef.current?.stop();
       engineRef.current = null;
       setSyncStatus("idle");
@@ -34,13 +63,21 @@ function SyncBridge(props: { readonly children: ReactNode }) {
 
     const url = resolveSyncUrl();
     if (!url) return;
+    const sessionGeneration = sessionGenerationRef.current.generation;
+    const isCurrentSession = () =>
+      sessionGenerationRef.current.generation === sessionGeneration;
 
     const engine = startSyncEngine({
       url,
-      getToken: () => getToken(),
+      getToken: () => (isCurrentSession() ? getTokenRef.current() : Promise.resolve(null)),
       deviceId: state.deviceId,
-      onStatus: setSyncStatus,
-      mergeRemoteEvents,
+      onStatus: (status) => {
+        if (isCurrentSession()) setSyncStatus(status);
+      },
+      mergeRemoteEvents: (events, cursor) => {
+        if (!isCurrentSession()) throw new Error("sync session changed");
+        return mergeRemoteEventsRef.current(events, cursor);
+      },
     });
     engineRef.current = engine;
 
@@ -48,7 +85,7 @@ function SyncBridge(props: { readonly children: ReactNode }) {
       engine.stop();
       engineRef.current = null;
     };
-  }, [getToken, isLoaded, isSignedIn, mergeRemoteEvents, setSyncStatus, state.deviceId, state.ready]);
+  }, [isLoaded, isSignedIn, sessionId, setSyncStatus, state.accountId, state.deviceId, state.ready, userId]);
 
   return props.children;
 }

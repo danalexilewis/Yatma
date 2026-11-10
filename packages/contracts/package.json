@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     "./health": "./src/health.ts",
-    "./sync": "./src/sync.ts"
+    "./sync": "./src/sync.ts",
+    "./turn": "./src/turn.ts"
   },
   "scripts": {
     "test": "vp test run --config ../../vite.config.ts",

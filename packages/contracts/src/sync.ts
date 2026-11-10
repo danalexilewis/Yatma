@@ -21,6 +21,7 @@ export const syncContract = {
       invalid_event: 422,
       clock_skew: 409,
       event_conflict: 409,
+      service_unavailable: 503,
     },
   },
 } as const satisfies ContractDef;

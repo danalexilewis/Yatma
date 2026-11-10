@@ -16,15 +16,35 @@ docs/            product, delivery plan, interface register, agent workflow
 
 ```bash
 pnpm install
+pnpm dev:web
+```
+
+Open the printed local URL in one browser tab or the T3 preview. `dev:web` avoids
+opening an additional system-browser tab. Leave Clerk unconfigured for local-only
+development; tasks are stored locally without a Worker or cloud database.
+
+```bash
 pnpm test
 pnpm -r typecheck
 ```
 
-- Mobile: `pnpm --filter @yatma/mobile dev` (set `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`, `EXPO_PUBLIC_SYNC_URL`)
+- Mobile/native: `pnpm dev`. For signed-in sync, copy `apps/mobile/.env.example`
+  to `apps/mobile/.env` and set `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` and
+  `EXPO_PUBLIC_SYNC_URL` to your configured services.
 - Worker: `cd apps/worker && cp .env.example .env && STAGE=dev pnpm deploy`
 
 Requires Node `^24` and pnpm `11.10.0`. Effect is pinned at `4.0.1`; alchemy at `2.0.0-beta.80`;
 never-rest at `0.7.0` and neverthrow at `8.2.0`.
+
+If web startup reports that Yatma is open elsewhere, close other Yatma tabs and
+windows on that origin, then choose **Reload**. Expo SQLite's web file pool has
+one owner per origin, across all account databases. Reload any older tabs after
+updating this code. This recovery preserves local data and unsent edits; clearing
+browser storage is unnecessary for a file-lock failure. Storage errors keep the
+workspace closed until its database opens successfully.
+
+The [storage and DX plan](docs/plans/storage-and-dx.md) records the startup fix,
+remaining acceptance, and the Turso sync evaluation.
 
 ## Product
 
@@ -36,6 +56,6 @@ remaining integration work and acceptance gates. Read the
 [never-rest guide](docs/development/never-rest.md), and
 [sub-agent setup](docs/development/sub-agents.md) before implementing a work item.
 
-The Worker now serves `GET /` and `GET /health` through the shared health
-contract. The sync contract is declared for the next adapter step; its HTTP
-route is not yet mounted. Existing WebSocket RPC remains during migration.
+The Worker serves health, sync push, and unary turn operations through shared
+never-rest contracts. Live sync and turn observation use WebSocket streams.
+The delivery plan tracks implementation and acceptance evidence separately.

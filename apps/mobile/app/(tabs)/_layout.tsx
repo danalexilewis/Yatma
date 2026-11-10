@@ -40,16 +40,16 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: "Now",
+          title: "Chat",
           tabBarIcon: ({ color, size }) => (
-            <TabIcon name="list-outline" size={size} color={String(color)} />
+            <TabIcon name="chatbubble-ellipses-outline" size={size} color={String(color)} />
           ),
         }}
       />
       <Tabs.Screen
         name="triage"
         options={{
-          title: "Triage",
+          title: "Matrix",
           tabBarIcon: ({ color, size }) => (
             <TabIcon name="grid-outline" size={size} color={String(color)} />
           ),
@@ -58,10 +58,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="chat"
         options={{
-          title: "Chat",
-          tabBarIcon: ({ color, size }) => (
-            <TabIcon name="chatbubble-ellipses-outline" size={size} color={String(color)} />
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen
@@ -70,6 +67,16 @@ export default function TabsLayout() {
           title: "Projects",
           tabBarIcon: ({ color, size }) => (
             <TabIcon name="folder-outline" size={size} color={String(color)} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: "Settings",
+          headerShown: true,
+          tabBarIcon: ({ color, size }) => (
+            <TabIcon name="settings-outline" size={size} color={String(color)} />
           ),
         }}
       />

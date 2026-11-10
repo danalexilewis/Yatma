@@ -31,15 +31,19 @@ Runtime-specific code stays out of the shared package.
 
 ## What runs today
 
-| Contract                  | Runtime status                                                                     |
-| ------------------------- | ---------------------------------------------------------------------------------- |
-| `@yatma/contracts/health` | Worker serves `GET /health` and `GET /`; WebSocket upgrades bypass this JSON mount |
-| `@yatma/contracts/sync`   | `pushEvents` declaration and conformance fixtures; HTTP route is not mounted yet   |
+| Contract                  | Runtime status                                                                                           |
+| ------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `@yatma/contracts/health` | Worker serves `GET /health` and `GET /`; WebSocket upgrades bypass this JSON mount                      |
+| `@yatma/contracts/sync`   | `pushEvents` is mounted at `POST /api/sync/events`; Worker verifies Clerk before calling the UserSpace RPC |
+| `@yatma/contracts/turn`   | `startTurn`, `getTurn`, and `stopTurn` are mounted under `/api/turns`; observation remains on WebSocket  |
 
-The sync declaration adapts the existing core input/output schemas using
-`Schema.toStandardSchemaV1`. S1/T1 must provide atomic/idempotent services and
-authenticated adapters before that operation is exposed. Existing RPC consumers
-remain in place during this first adoption step.
+The declarations adapt existing core input/output schemas using
+`Schema.toStandardSchemaV1`. The Worker host verifies Clerk and supplies the
+verified user ID to the HTTP handlers; the handlers bridge to the existing
+UserSpace RPC services. Mobile sync push and unary turn control now use the
+typed HTTP client. The RPC path remains active for streaming operations and
+other legacy unary methods. Mounting and local client tests do not establish
+Cloudflare deployment or device acceptance.
 
 ## Typed HTTP client
 
@@ -118,10 +122,11 @@ See [files and streams](https://project-eddy.github.io/never-rest/docs/files-and
 - Derive trust/disclosure from verified server policy, never a caller-supplied trust header.
 - Add authenticated policy with complete operation coverage when mounting user operations.
 
-The sync fixture tests show a declared `clock_skew` failure crossing HTTP with
-advice intact and diagnostic context removed at public disclosure. This is the
-pattern for actionable failures; it does not establish the future runtime's auth
-or transaction behavior. See
+Contract fixture tests show declared failures crossing HTTP with advice intact
+and diagnostic context removed at public disclosure. Worker HTTP tests exercise
+host-verified principal routing and invalid-input/unauthenticated short circuits.
+These checks do not establish deployed Clerk behavior, Cloudflare transaction
+semantics, or native-device acceptance. See
 [errors as intelligence](https://project-eddy.github.io/never-rest/docs/errors-as-intelligence/)
 and [policy](https://project-eddy.github.io/never-rest/docs/advanced-usage/#definepolicy).
 
@@ -135,7 +140,8 @@ pnpm -r typecheck
 
 Add output fixtures for JSON transport stability, invalid-input-before-side-effect
 cases, declared failure mapping, and actual adapter conformance. Always import
-the production contract in tests.
+the production contract in tests. The current tests cover contract fixtures and
+the Worker HTTP bridge; deployed and native acceptance remains outstanding.
 
 Migrate by bounded context:
 

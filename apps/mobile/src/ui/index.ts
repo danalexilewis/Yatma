@@ -5,3 +5,5 @@ export { Row } from "./Row";
 export { Screen } from "./Screen";
 export { ScreenHeader } from "./ScreenHeader";
 export { SegmentedControl } from "./SegmentedControl";
+export { DateEditor } from "./DateEditor";
+export { ProjectPicker } from "./ProjectPicker";

@@ -18,17 +18,26 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as EventStore from "../eventStore.ts";
 import * as OpenRouter from "./openrouter.ts";
 import * as Tools from "./tools.ts";
 import * as Usage from "./usage.ts";
+import * as ModelGateway from "./modelGateway.ts";
+import type { MutationService } from "../application/mutations.ts";
 
 export type TurnInput = {
   readonly chatId: ChatId;
   readonly projectId: ProjectId | null;
   readonly text: string;
   readonly turnId: string;
+  readonly requestId?: string;
+  readonly messageId?: string;
+  readonly batchId?: string;
+  readonly mutations?: MutationService;
+  readonly gateway?: ModelGateway.ModelGateway;
   readonly model: string;
   readonly openRouterKey: string | null;
   readonly signal: AbortSignal;
@@ -67,264 +76,211 @@ function asNullableString(value: unknown): string | null | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function readUsageSnapshot() {
-  return Effect.gen(function* () {
-    const month = Usage.currentMonthKey();
-    const storedMonth = yield* EventStore.getMeta("usage.month");
-    if (storedMonth !== month) {
-      yield* EventStore.setMeta("usage.month", month);
-      yield* EventStore.setMeta("usage.tokens", "0");
-    }
-    const tokensRaw = yield* EventStore.getMeta("usage.tokens");
-    return {
-      used: Number(tokensRaw ?? "0") || 0,
-      limit: Usage.getTokenCap(),
-    };
-  });
-}
-
-function recordTokens(tokens: number) {
-  return Effect.gen(function* () {
-    const snap = yield* readUsageSnapshot();
-    const next = snap.used + Math.max(0, tokens);
-    if (next > snap.limit) {
-      return { ok: false as const, snapshot: snap };
-    }
-    yield* EventStore.setMeta("usage.tokens", String(next));
-    return {
-      ok: true as const,
-      snapshot: { ...snap, used: next },
-    };
-  });
+function toTurnFail(error: unknown): TurnFail {
+  if (typeof error === "object" && error !== null && "_tag" in error &&
+      ((error as TurnFail)._tag === "BudgetExceeded" || (error as TurnFail)._tag === "Internal")) {
+    return error as TurnFail;
+  }
+  return { _tag: "Internal", message: String(error) };
 }
 
 /**
  * Run one detached agent turn: context → OpenRouter (or stub) → tools → stream items.
  */
 export function runAgentTurn(input: TurnInput) {
-  return Stream.unwrap(
-    Effect.gen(function* () {
-      const nowIso = new Date().toISOString();
-      const actor = agentActor(input.chatId, input.model);
-      const batchId = Tools.newBatchId();
+  let reservationId: string | null = null;
+  let actualTokens = 0;
+  return Stream.unwrap(Effect.gen(function* () {
+    const nowIso = new Date().toISOString();
+    const actor = agentActor(input.chatId, input.model);
+    const batchId = input.batchId ? BatchIdSchema.make(input.batchId) : Tools.newBatchId();
+    const messageId = input.messageId ?? `msg_${input.turnId}`;
 
-      const snap = yield* readUsageSnapshot();
-      if (snap.used >= snap.limit) {
+    if (input.openRouterKey) {
+      const reserved = yield* Usage.reserve(input.requestId ?? input.turnId, 30_000);
+      if (!reserved.ok) {
         return yield* Effect.fail({
           _tag: "BudgetExceeded" as const,
-          used: snap.used,
-          limit: snap.limit,
+          used: reserved.snapshot.used + reserved.snapshot.reserved,
+          limit: reserved.snapshot.limit,
         } satisfies TurnFail);
       }
+      reservationId = reserved.reservation.reservationId;
+    }
 
-      const folded = yield* EventStore.loadFolded;
-      const bootstrap: Event[] = [];
-      if (!folded.chats.has(input.chatId)) {
-        bootstrap.push({
-          v: 1,
-          type: "chat.created",
-          id: generateEventId(),
-          at: nowIso,
-          by: actor,
-          chatId: input.chatId,
-          projectId: input.projectId,
-          title: null,
-        });
-      }
-
-      // Persist the user turn if the phone outbox did not already include it.
-      const alreadyHasUserText = [...(folded.chats.get(input.chatId)?.messages ?? [])].some(
-        (message) => message.role === "user" && message.text === input.text,
-      );
-      if (!alreadyHasUserText) {
-        bootstrap.push({
-          v: 1,
-          type: "chat.message",
-          id: generateEventId(),
-          at: nowIso,
-          by: actor,
-          chatId: input.chatId,
-          messageId: `msg_${generateShortId("t_").slice(2)}`,
-          role: "user",
-          text: input.text,
-        });
-      }
-
-      if (bootstrap.length > 0) {
+    const folded = yield* EventStore.loadFolded;
+    const bootstrap: Event[] = [];
+    if (!folded.chats.has(input.chatId)) {
+      bootstrap.push({
+        v: 1, type: "chat.created", id: generateEventId(), at: nowIso, by: actor,
+        chatId: input.chatId, projectId: input.projectId, title: null,
+      });
+    }
+    const alreadyHasUserText = [...(folded.chats.get(input.chatId)?.messages ?? [])].some(
+      (message) => message.role === "user" && message.id === messageId,
+    );
+    if (!alreadyHasUserText) {
+      bootstrap.push({
+        v: 1, type: "chat.message", id: generateEventId(), at: nowIso, by: actor,
+        chatId: input.chatId, messageId, role: "user", text: input.text,
+      });
+    }
+    if (bootstrap.length > 0) {
+      if (input.mutations) {
+        const commands = [];
+        if (!folded.chats.has(input.chatId)) {
+          commands.push({ type: "chat.create" as const, chatId: input.chatId, input: { projectId: input.projectId, title: null } });
+        }
+        if (!alreadyHasUserText) {
+          commands.push({ type: "chat.message" as const, chatId: input.chatId, messageId, role: "user" as const, text: input.text });
+        }
+        yield* input.mutations.executeBatch({ commands, actor, batchId, now: nowIso });
+      } else {
         const pushed = yield* EventStore.pushEvents(bootstrap, nowIso);
         if (!pushed.ok) {
-          return yield* Effect.fail({
-            _tag: "Internal" as const,
-            message: "persist_chat_bootstrap_failed",
-          } satisfies TurnFail);
+          return yield* Effect.fail({ _tag: "Internal" as const, message: "persist_chat_bootstrap_failed" } satisfies TurnFail);
         }
       }
+    }
 
-      const foldedAfter = yield* EventStore.loadFolded;
-      const context = buildContext({
-        today: todayIso(),
-        projects: foldedAfter.projects,
-        tasks: foldedAfter.tasks,
-        pages: foldedAfter.pages,
-        chats: foldedAfter.chats,
-        projectId: input.projectId,
-        chatId: input.chatId,
-        tokenBudget: 6_000,
-      });
-      const contextBlock = contextText(context);
+    const foldedAfter = yield* EventStore.loadFolded;
+    const context = buildContext({
+      today: todayIso(), projects: foldedAfter.projects, tasks: foldedAfter.tasks,
+      pages: foldedAfter.pages, chats: foldedAfter.chats, projectId: input.projectId,
+      chatId: input.chatId, tokenBudget: 6_000,
+    });
+    const contextBlock = contextText(context);
+    let assistantText = "";
 
-      const items: ChatStreamItem[] = [
-        { kind: "started", chatId: input.chatId, turnId: input.turnId },
-      ];
-
-      let assistantText = "";
-      let totalTokens = 0;
-
-      if (!input.openRouterKey) {
-        assistantText = `(stub) Heard: ${input.text.slice(0, 200)}\n\nContext tokens ≈ ${context.estimatedTokens}. Set OPENROUTER_API_KEY for live tools.`;
-        items.push({ kind: "text_delta", text: assistantText });
-      } else {
-        const config: OpenRouter.OpenRouterConfig = {
-          apiKey: Redacted.make(input.openRouterKey),
-          model: input.model,
-        };
-        const messages: OpenRouter.ChatMessage[] = [
-          {
-            role: "system",
-            content:
-              "You are Yatma, a concise task assistant. Use tools to inspect and change tasks. Prefer apply_changes for mutations. Cite entities as markdown refs like [title](task:t_XXXXXXXX).",
-          },
-          {
-            role: "system",
-            content: `Workspace context:\n${contextBlock}`,
-          },
-          { role: "user", content: input.text },
-        ];
-
-        for (let round = 0; round < 4; round += 1) {
-          if (input.signal.aborted) break;
-          const completion = yield* OpenRouter.completeChat(config, messages, {
-            tools: OpenRouter.agentToolDefs(),
-            signal: input.signal,
-          }).pipe(
-            Effect.map(Option.some),
-            Effect.catch(() => Effect.succeed(Option.none())),
-          );
-          if (Option.isNone(completion)) {
-            assistantText =
-              assistantText ||
-              "I could not reach the model. Try again in a moment.";
-            items.push({ kind: "text_delta", text: assistantText });
-            break;
-          }
-          const result = completion.value;
-          totalTokens += result.tokens;
-          if (result.text) {
-            assistantText += result.text;
-            items.push({ kind: "text_delta", text: result.text });
-          }
-          if (result.toolCalls.length === 0) break;
-
-          messages.push({
-            role: "assistant",
-            content: result.text || "",
-            tool_calls: result.toolCalls,
+    const complete = (): Stream.Stream<ChatStreamItem, TurnFail, SqlClient.SqlClient> => Stream.unwrap(Effect.gen(function* () {
+      if (!input.signal.aborted && assistantText.trim().length > 0) {
+        if (input.mutations) {
+          yield* input.mutations.executeBatch({
+            commands: [{ type: "chat.message", chatId: input.chatId, messageId: `msg_${input.turnId}_assistant`, role: "assistant", text: assistantText }],
+            actor, batchId, now: new Date().toISOString(),
           });
+        } else {
+          const pushed = yield* EventStore.pushEvents([{
+            v: 1, type: "chat.message", id: generateEventId(), at: new Date().toISOString(), by: actor,
+            chatId: input.chatId, messageId: `msg_${input.turnId}_assistant`, role: "assistant", text: assistantText,
+          }], new Date().toISOString());
+          if (!pushed.ok) return yield* Effect.fail({ _tag: "Internal" as const, message: "persist_assistant_message_failed" } satisfies TurnFail);
+        }
+      }
+      return Stream.make({ kind: "done", chatId: input.chatId, turnId: input.turnId });
+    }).pipe(Effect.mapError(toTurnFail)));
 
-          for (const call of result.toolCalls) {
-            if (input.signal.aborted) break;
-            items.push({
-              kind: "tool_started",
-              tool: call.function.name,
-              toolCallId: call.id,
-            });
-            const args = parseJsonObject(call.function.arguments) ?? {};
-            const toolCtx: Tools.ToolActorContext = {
-              actor,
-              batchId,
-              nowIso: new Date().toISOString(),
-            };
-            const toolResult = yield* dispatchTool(call.function.name, args, toolCtx);
-            if (
-              toolResult &&
-              typeof toolResult === "object" &&
-              "events" in toolResult &&
-              Array.isArray((toolResult as { events: unknown }).events) &&
-              (toolResult as { events: Event[] }).events.length > 0
-            ) {
-              const batch = toolResult as {
-                batchId?: string;
-                events: Event[];
-                summary?: string;
-              };
-              items.push({
-                kind: "changes",
-                batchId: batch.batchId ?? batchId,
-                events: batch.events,
-                summary: batch.summary ?? "Changes applied",
-              });
-            }
-            messages.push({
-              role: "tool",
-              tool_call_id: call.id,
-              content: JSON.stringify(toolResult),
-            });
+    const runToolCalls = (
+      calls: readonly OpenRouter.ToolCall[],
+      messages: OpenRouter.ChatMessage[],
+      nextRoundIndex: number,
+      index = 0,
+    ): Stream.Stream<ChatStreamItem, TurnFail, SqlClient.SqlClient> => Stream.suspend(() => {
+      const call = calls[index];
+      if (!call || input.signal.aborted) return round(nextRoundIndex);
+      const started: ChatStreamItem = { kind: "tool_started", tool: call.function.name, toolCallId: call.id };
+      const execute = Stream.unwrap(Effect.gen(function* () {
+        const args = parseJsonObject(call.function.arguments) ?? {};
+        const toolCtx: Tools.ToolActorContext = {
+          actor, batchId, nowIso: new Date().toISOString(),
+          ...(input.mutations ? { mutations: input.mutations } : {}),
+        };
+        const toolResult = yield* dispatchTool(call.function.name, args, toolCtx).pipe(Effect.mapError(toTurnFail));
+        messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(toolResult) });
+        let changeItem: ChatStreamItem | null = null;
+        if (toolResult && typeof toolResult === "object" && "events" in toolResult &&
+            Array.isArray((toolResult as { events: unknown }).events) && (toolResult as { events: Event[] }).events.length > 0) {
+          const batch = toolResult as { batchId?: string; events: Event[]; summary?: string };
+          changeItem = {
+            kind: "changes", batchId: batch.batchId ?? batchId, events: batch.events,
+            summary: batch.summary ?? "Changes applied",
+          };
+        }
+        return changeItem;
+      }).pipe(
+        Effect.mapError(toTurnFail),
+        Effect.map((changeItem) => Stream.concat(
+          changeItem ? Stream.make(changeItem) : Stream.empty,
+          runToolCalls(calls, messages, nextRoundIndex, index + 1),
+        )),
+      ));
+      return Stream.concat(Stream.make(started), execute);
+    });
+
+    const round = (roundIndex: number): Stream.Stream<ChatStreamItem, TurnFail, SqlClient.SqlClient> => Stream.suspend(() => {
+      if (input.signal.aborted || roundIndex >= 4) return complete();
+      const config: OpenRouter.OpenRouterConfig = {
+        apiKey: Redacted.make(input.openRouterKey ?? ""), model: input.model,
+      };
+      const messages: OpenRouter.ChatMessage[] = roundIndex === 0 ? [
+        {
+          role: "system",
+          content: "You are Yatma, a concise task assistant. Use tools to inspect and change tasks. Prefer apply_changes for mutations. Cite entities as markdown refs like [title](task:t_XXXXXXXX).",
+        },
+        { role: "system", content: `Workspace context:\n${contextBlock}` },
+        { role: "user", content: input.text },
+      ] : roundMessages;
+      // The shared message history is retained between tool rounds.
+      if (roundIndex === 0) roundMessages = messages;
+      let roundText = "";
+      let tokens = 0;
+      let calls: OpenRouter.ToolCall[] = [];
+      let providerFailed = false;
+      const gateway = input.gateway ?? ModelGateway.makeOpenRouterGateway(config);
+      const frames = gateway.stream(messages, input.signal).pipe(
+        Stream.tap((frame) => Effect.sync(() => {
+          if (frame.type === "text") {
+            roundText += frame.text;
+            assistantText += frame.text;
           }
-        }
-      }
+          else if (frame.type === "tool_call") calls.push(frame.call);
+          else tokens += frame.tokens;
+        })),
+        Stream.filter((frame): frame is Extract<ModelGateway.GatewayFrame, { readonly type: "text" }> => frame.type === "text" && frame.text.length > 0),
+        Stream.map((frame) => ({ kind: "text_delta", text: frame.text } satisfies ChatStreamItem)),
+        Stream.catch(() => {
+          providerFailed = true;
+          if (input.signal.aborted) return Stream.empty;
+          if (roundText.length === 0) {
+            const fallback = "I could not reach the model. Try again in a moment.";
+            roundText = fallback;
+            assistantText += fallback;
+            return Stream.make({ kind: "text_delta", text: fallback });
+          }
+          return Stream.empty;
+        }),
+      );
+      const afterFrames = Stream.unwrap(Effect.sync(() => {
+        actualTokens += tokens;
+        if (providerFailed || calls.length === 0) return complete();
+        messages.push({ role: "assistant", content: roundText, tool_calls: calls });
+        return runToolCalls(calls, messages, roundIndex + 1);
+      }));
+      return Stream.concat(frames, afterFrames);
+    });
 
-      if (input.signal.aborted) {
-        items.push({ kind: "done", chatId: input.chatId, turnId: input.turnId });
-        return Stream.fromIterable(items);
-      }
-
-      if (assistantText.trim().length > 0) {
-        yield* EventStore.pushEvents(
-          [
-            {
-              v: 1,
-              type: "chat.message",
-              id: generateEventId(),
-              at: new Date().toISOString(),
-              by: actor,
-              chatId: input.chatId,
-              messageId: `msg_${generateShortId("t_").slice(2)}`,
-              role: "assistant",
-              text: assistantText,
-            },
-          ],
-          new Date().toISOString(),
-        );
-      }
-
-      if (totalTokens > 0) {
-        const recorded = yield* recordTokens(totalTokens);
-        if (!recorded.ok) {
-          return yield* Effect.fail({
-            _tag: "BudgetExceeded" as const,
-            used: recorded.snapshot.used,
-            limit: recorded.snapshot.limit,
-          } satisfies TurnFail);
-        }
-      }
-
-      items.push({ kind: "done", chatId: input.chatId, turnId: input.turnId });
-      return Stream.fromIterable(items);
-    }).pipe(
-      Effect.mapError((err): TurnFail => {
-        if (
-          typeof err === "object" &&
-          err !== null &&
-          "_tag" in err &&
-          ((err as TurnFail)._tag === "BudgetExceeded" ||
-            (err as TurnFail)._tag === "Internal")
-        ) {
-          return err as TurnFail;
-        }
-        return { _tag: "Internal", message: String(err) };
-      }),
-    ),
-  );
+    let roundMessages: OpenRouter.ChatMessage[] = [];
+    const progress = input.openRouterKey
+      ? round(0)
+      : Stream.concat(
+        Stream.make({ kind: "text_delta", text: `(stub) Heard: ${input.text.slice(0, 200)}\n\nContext tokens ≈ ${context.estimatedTokens}. Set OPENROUTER_API_KEY for live tools.` }),
+        complete(),
+      );
+    const output = Stream.concat(Stream.make({ kind: "started", chatId: input.chatId, turnId: input.turnId }), progress);
+    return Stream.ensuring(output, Effect.suspend(() =>
+      reservationId ? Usage.settle(reservationId, actualTokens).pipe(Effect.asVoid, Effect.ignore) : Effect.void,
+    ));
+  }).pipe(
+    Effect.catchCause((cause) => Effect.gen(function* () {
+      if (reservationId) yield* Usage.settle(reservationId, actualTokens).pipe(Effect.asVoid, Effect.ignore);
+      return yield* Effect.failCause(cause);
+    })),
+    Effect.mapError((err): TurnFail => {
+      if (typeof err === "object" && err !== null && "_tag" in err &&
+          ((err as TurnFail)._tag === "BudgetExceeded" || (err as TurnFail)._tag === "Internal")) return err as TurnFail;
+      return { _tag: "Internal", message: String(err) };
+    }),
+  ));
 }
 
 function dispatchTool(
@@ -333,6 +289,10 @@ function dispatchTool(
   ctx: Tools.ToolActorContext,
 ) {
   return Effect.gen(function* () {
+    const schemaTool = Tools.getToolkitTool(name);
+    if (!schemaTool || Option.isNone(Schema.decodeUnknownOption(schemaTool.parametersSchema as never)(args))) {
+      return { error: `invalid arguments for ${name}` };
+    }
     switch (name) {
       case "list_tasks": {
         const projectIdRaw = asNullableString(args.projectId);

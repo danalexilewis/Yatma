@@ -142,4 +142,30 @@ describe("planUndo", () => {
       },
     ]);
   });
+
+  it("uses the earliest preimage for repeated writes and field provenance for away-and-back edits", () => {
+    const { task } = seedTask("Original");
+    const first = { ...envelope(2, "2026-10-06T02:00:00.000Z", "batch1"), type: "task.updated" as const, taskId, set: { title: "Batch title", notes: "Batch note" }, prev: { title: "Original", notes: "" } };
+    const second = { ...envelope(3, "2026-10-06T03:00:00.000Z", "batch1"), type: "task.updated" as const, taskId, set: { title: "Final title" }, prev: { title: "Batch title" } };
+    const later = eventId(4);
+    const current = { projects: new Map(), tasks: new Map([[taskId, { ...task, title: "Original", notes: "Batch note" }]]), pages: new Map(), chats: new Map() };
+    const latestWrites = new Map([[`task:${taskId}`, new Map([["title", later], ["notes", first.id]])]]);
+    const plan = planUndo([first, second], current, latestWrites);
+    expect(plan.reverts).toEqual([{ type: "task.updated", taskId, set: { notes: "" } }]);
+    expect(plan.skipped).toEqual([{ entityId: taskId, field: "title", reason: "changed_since" }]);
+  });
+
+  it("keeps create undo semantics through batch updates and preserves a later edit", () => {
+    const created = { ...envelope(2, "2026-10-06T02:00:00.000Z", "batch1"), type: "task.created" as const, taskId, projectId, title: "Created", status: "todo" as const, quadrant: null, position: "t" };
+    const update = { ...envelope(3, "2026-10-06T03:00:00.000Z", "batch1"), type: "task.updated" as const, taskId, set: { title: "Updated" }, prev: { title: "Created" } };
+    const { task } = seedTask();
+    const current = { projects: new Map(), tasks: new Map([[taskId, { ...task, title: "Updated" }]]), pages: new Map(), chats: new Map() };
+    expect(planUndo([created, update], current, new Map([[`task:${taskId}`, new Map([["title", update.id]])]])).reverts).toEqual([
+      { type: "task.updated", taskId, set: { deleted: true }, fromCreate: true },
+    ]);
+    const outsideId = eventId(4);
+    const preserved = planUndo([created], current, new Map([[`task:${taskId}`, new Map([["title", outsideId]])]]));
+    expect(preserved.reverts).toEqual([]);
+    expect(preserved.skipped).toEqual([{ entityId: taskId, field: "title", reason: "changed_since" }]);
+  });
 });

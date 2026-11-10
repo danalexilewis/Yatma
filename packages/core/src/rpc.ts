@@ -112,6 +112,62 @@ export const ChatStopInput = Schema.Struct({
 });
 export type ChatStopInput = typeof ChatStopInput.Type;
 
+/** Durable turn lifecycle states exposed to clients after start or recovery. */
+export const TurnStatus = Schema.Literals([
+  "queued",
+  "running",
+  "completed",
+  "stopped",
+  "failed",
+  "interrupted",
+]);
+export type TurnStatus = typeof TurnStatus.Type;
+
+export const TurnReceipt = Schema.Struct({
+  turnId: Schema.String,
+  chatId: ChatId,
+  batchId: Schema.String,
+  status: TurnStatus,
+});
+export type TurnReceipt = typeof TurnReceipt.Type;
+
+/** Client identity makes retries safe without conflating repeated message text. */
+export const TurnStartInput = Schema.Struct({
+  requestId: Schema.String,
+  messageId: Schema.String,
+  chatId: Schema.optional(ChatId),
+  projectId: Schema.NullOr(ProjectId),
+  text: Schema.String,
+  events: Schema.Array(Event),
+});
+export type TurnStartInput = typeof TurnStartInput.Type;
+
+export const TurnGetInput = Schema.Struct({ turnId: Schema.String });
+export type TurnGetInput = typeof TurnGetInput.Type;
+
+export const TurnGetResult = Schema.Struct({
+  receipt: TurnReceipt,
+  resultText: Schema.NullOr(Schema.String),
+  batches: Schema.Array(
+    Schema.Struct({ batchId: Schema.String, events: Schema.Array(Event), summary: Schema.String }),
+  ),
+  error: Schema.NullOr(Schema.String),
+});
+export type TurnGetResult = typeof TurnGetResult.Type;
+
+export const TurnStopInput = Schema.Struct({ turnId: Schema.String });
+export type TurnStopInput = typeof TurnStopInput.Type;
+
+export const TurnStopResult = Schema.Struct({ ok: Schema.Literal(true) });
+export type TurnStopResult = typeof TurnStopResult.Type;
+
+/** Sequenced frames belong to the host stream lifecycle, not the JSON contract. */
+export const TurnFrame = Schema.Struct({ seq: Seq, item: ChatStreamItem });
+export type TurnFrame = typeof TurnFrame.Type;
+
+export const TurnObserveInput = Schema.Struct({ turnId: Schema.String, after: Seq });
+export type TurnObserveInput = typeof TurnObserveInput.Type;
+
 export const ChatWrapUpInput = Schema.Struct({
   chatId: ChatId,
 });
@@ -181,6 +237,31 @@ export const ChatStopRpc = Rpc.make("chat.stop", {
   error: SpaceError,
 });
 
+export const TurnStartRpc = Rpc.make("turn.start", {
+  payload: TurnStartInput,
+  success: TurnReceipt,
+  error: SpaceError,
+});
+
+export const TurnGetRpc = Rpc.make("turn.get", {
+  payload: TurnGetInput,
+  success: TurnGetResult,
+  error: SpaceError,
+});
+
+export const TurnStopRpc = Rpc.make("turn.stop", {
+  payload: TurnStopInput,
+  success: TurnStopResult,
+  error: SpaceError,
+});
+
+export const TurnObserveRpc = Rpc.make("turn.observe", {
+  payload: TurnObserveInput,
+  success: TurnFrame,
+  error: SpaceError,
+  stream: true,
+});
+
 export const ChatWrapUpRpc = Rpc.make("chat.wrapUp", {
   payload: ChatWrapUpInput,
   success: ChatWrapUpResult,
@@ -210,6 +291,10 @@ export const SpaceRpcGroup = RpcGroup.make(
   SyncSubscribeRpc,
   ChatSendRpc,
   ChatStopRpc,
+  TurnStartRpc,
+  TurnGetRpc,
+  TurnStopRpc,
+  TurnObserveRpc,
   ChatWrapUpRpc,
   TranscribeRpc,
   UsageGetRpc,

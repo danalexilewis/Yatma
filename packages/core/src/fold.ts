@@ -60,6 +60,7 @@ function applyTaskCreated(tasks: Map<TaskId, Task>, event: TaskCreatedEvent): vo
     id: event.taskId,
     projectId: event.projectId,
     title: event.title,
+    tags: event.tags ?? [],
     notes: event.notes ?? "",
     dueDate: event.dueDate ?? null,
     status: event.status,
@@ -84,6 +85,7 @@ function applyTaskUpdated(tasks: Map<TaskId, Task>, event: TaskUpdatedEvent): vo
     ...existing,
     projectId: set.projectId !== undefined ? set.projectId : existing.projectId,
     title: set.title ?? existing.title,
+    tags: set.tags ?? existing.tags ?? [],
     notes: set.notes ?? existing.notes,
     dueDate: set.dueDate !== undefined ? set.dueDate : existing.dueDate,
     status: nextStatus,
@@ -107,10 +109,14 @@ function applyTaskUpdated(tasks: Map<TaskId, Task>, event: TaskUpdatedEvent): vo
 }
 
 function applyProjectCreated(projects: Map<ProjectId, Project>, event: ProjectCreatedEvent): void {
+  if (projects.has(event.projectId)) return;
   projects.set(event.projectId, {
     id: event.projectId,
     title: event.title,
     color: event.color ?? null,
+    description: "",
+    targetDate: null,
+    bookmarks: [],
     archivedAt: null,
     createdAt: event.at,
     updatedAt: event.at,
@@ -125,6 +131,9 @@ function applyProjectUpdated(projects: Map<ProjectId, Project>, event: ProjectUp
     ...existing,
     title: set.title ?? existing.title,
     color: set.color !== undefined ? set.color : existing.color,
+    description: set.description ?? existing.description ?? "",
+    targetDate: set.targetDate !== undefined ? set.targetDate : (existing.targetDate ?? null),
+    bookmarks: set.bookmarks ?? existing.bookmarks ?? [],
     archivedAt:
       set.archived === true
         ? (existing.archivedAt ?? event.at)
@@ -171,11 +180,14 @@ function applyPageUpdated(pages: Map<PageId, Page>, event: PageUpdatedEvent): vo
 }
 
 function applyChatCreated(chats: Map<ChatId, Chat>, event: ChatCreatedEvent): void {
+  // Offline devices can independently initialize the permanent thread.
+  if (chats.has(event.chatId)) return;
   chats.set(event.chatId, {
     id: event.chatId,
     projectId: event.projectId,
     title: event.title ?? null,
     summary: null,
+    headings: [],
     messages: [],
     createdAt: event.at,
     updatedAt: event.at,
@@ -215,6 +227,7 @@ function applyChatUpdated(chats: Map<ChatId, Chat>, event: ChatUpdatedEvent): vo
     ...existing,
     title: set.title !== undefined ? set.title : existing.title,
     summary: set.summary !== undefined ? set.summary : existing.summary,
+    headings: set.headings ?? existing.headings ?? [],
     updatedAt: event.at,
   });
 }

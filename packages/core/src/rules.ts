@@ -257,6 +257,7 @@ export function planUpdate(
   const set: {
     projectId?: ProjectId | null;
     title?: string;
+    tags?: readonly string[];
     notes?: string;
     dueDate?: string | null;
     status?: TaskStatus;
@@ -269,6 +270,10 @@ export function planUpdate(
     set.projectId = input.projectId;
   }
   if (input.title !== undefined && input.title !== current.title) set.title = input.title;
+  if (input.tags !== undefined) {
+    const tags = [...new Set(input.tags.map((tag) => tag.trim()).filter(Boolean))];
+    if (JSON.stringify(tags) !== JSON.stringify(current.tags ?? [])) set.tags = tags;
+  }
   if (input.notes !== undefined && input.notes !== current.notes) set.notes = input.notes;
   if (input.dueDate !== undefined && input.dueDate !== current.dueDate) set.dueDate = input.dueDate;
 
@@ -294,14 +299,6 @@ export function planUpdate(
     (input.deleted === undefined || input.deleted === false)
   ) {
     nextPosition = resolveStartPosition(tasks, current.id);
-  } else if (
-    input.quadrant !== undefined &&
-    input.quadrant !== current.quadrant &&
-    nextStatus === "todo" &&
-    (current.deletedAt === null || input.deleted === false)
-  ) {
-    const triaged = resolveTriagePosition(tasks, current.id, input.quadrant);
-    if (triaged !== null) nextPosition = triaged;
   }
 
   if (nextPosition !== current.position) set.position = nextPosition;
@@ -312,6 +309,7 @@ export function planUpdate(
     ...current,
     projectId: set.projectId !== undefined ? set.projectId : current.projectId,
     title: set.title ?? current.title,
+    tags: set.tags ?? current.tags ?? [],
     notes: set.notes ?? current.notes,
     dueDate: set.dueDate !== undefined ? set.dueDate : current.dueDate,
     status: set.status ?? current.status,
@@ -368,10 +366,22 @@ export function planProjectUpdate(
   const set: {
     title?: string;
     color?: string | null;
+    description?: string;
+    targetDate?: string | null;
+    bookmarks?: Project["bookmarks"];
     archived?: boolean;
   } = {};
   if (input.title !== undefined && input.title !== current.title) set.title = input.title;
   if (input.color !== undefined && input.color !== current.color) set.color = input.color;
+  if (input.description !== undefined && input.description !== (current.description ?? ""))
+    set.description = input.description;
+  if (input.targetDate !== undefined && input.targetDate !== (current.targetDate ?? null))
+    set.targetDate = input.targetDate;
+  if (
+    input.bookmarks !== undefined &&
+    JSON.stringify(input.bookmarks) !== JSON.stringify(current.bookmarks ?? [])
+  )
+    set.bookmarks = input.bookmarks;
   if (input.archived === true && current.archivedAt === null) set.archived = true;
   if (input.archived === false && current.archivedAt !== null) set.archived = false;
 
@@ -381,6 +391,9 @@ export function planProjectUpdate(
     ...current,
     title: set.title ?? current.title,
     color: set.color !== undefined ? set.color : current.color,
+    description: set.description ?? current.description ?? "",
+    targetDate: set.targetDate !== undefined ? set.targetDate : (current.targetDate ?? null),
+    bookmarks: set.bookmarks ?? current.bookmarks ?? [],
     archivedAt:
       set.archived === true
         ? (current.archivedAt ?? new Date(0).toISOString())

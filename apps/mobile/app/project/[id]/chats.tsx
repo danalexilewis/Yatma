@@ -1,5 +1,5 @@
-import { ProjectChatsScreen } from "../../../src/features/project/ProjectSectionScreens";
+import { Redirect } from "expo-router";
 
 export default function ProjectChatsRoute() {
-  return <ProjectChatsScreen />;
+  return <Redirect href="/" />;
 }

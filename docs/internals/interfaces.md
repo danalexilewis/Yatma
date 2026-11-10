@@ -1,9 +1,21 @@
 # Application interface register
 
-Status: target interfaces for the [private-alpha plan](../plans/private-alpha.md).
-The implemented never-rest surface currently consists of the health mount and
-an unmounted sync contract. Other names below are design commitments for the
-listed work items, not claims that these services already exist.
+Status: mixed implementation and target register for the
+[private-alpha plan](../plans/private-alpha.md). Read each section's status
+before treating an interface below as implemented or accepted. Health, sync
+push, and unary turn HTTP contracts are mounted in the Worker. Mobile sync push
+and unary turn controls use the typed HTTP client; live sync and turn observation
+remain streams over WebSocket. Mounting and local tests do not establish
+Cloudflare or native-device acceptance.
+
+Outstanding acceptance includes Expo SQLite and Cloudflare Durable Object/SQLite
+behavior, two-device sync/turn flows, and a configured EAS/App Store Connect
+tester build with real auth, model, and audio bindings. The private-alpha plan
+tracks these gates and their evidence separately from implementation checkmarks.
+
+The [next-build plan](../plans/next-build.md) orders the proposed F1–F4 and
+DS1–DS3 work with these existing boundaries. Its N01 task finalizes new domain
+and compatibility contracts before new day/player writers are enabled.
 
 ## Dependency direction
 
@@ -48,13 +60,22 @@ batch write. Value equality alone is insufficient when a later user edit returns
 to the same value; latest-write provenance determines whether the batch still
 owns that field. Created-then-updated entities retain creation undo semantics.
 
-Existing implementation: `rules.ts`, `undo.ts`, `clock.ts`, `events.ts`; command
-orchestration is duplicated in mobile `events/write.ts` and Worker `agent/tools.ts`.
+Implemented: core command planning and undo policy are in `commands.ts`,
+`batch.ts`, `undo.ts`, and related pure modules. The coordinator should verify
+that every planned writer uses the shared planner before marking this area
+complete; native acceptance is separate.
 
 ## 2. Serialized mutation writer — D1/L1/S1
 
-Proposed homes: mobile `src/application/mutations.ts` and Worker
-`src/application/mutations.ts`; injected storage ports live beside their adapters.
+Implemented in part: both mobile and Worker have application mutation services
+(`apps/mobile/src/application/mutations.ts` and
+`apps/worker/src/application/mutations.ts`). The Worker wires its service into
+UserSpace, agent tools, and curator; mutation-backed agent batches route writes
+including undo through the service. The legacy EventStore fallback remains in
+`agent/tools.ts` for contexts without an injected service. Worker mutation
+operations check the durable account lifecycle fence before writes, and incoming
+sync commits use the same guard. Mobile manual writes use the application
+service. Expo SQLite/native acceptance is still outstanding.
 
 ```text
 execute(commands, actor/batch context)
@@ -127,8 +148,11 @@ actor and device checks at this adapter boundary.
 
 ## 5. Sync lifecycle and streaming host — T1
 
-Existing code: mobile `sync/client.ts`, `sync/engine.ts`, auth bridge; Worker
-`UserSpace.ts`. Target unary operation: `syncContract.pushEvents`.
+Implemented: the contract `syncContract.pushEvents` is served at
+`POST /api/sync/events`; Worker Clerk verification supplies the principal, and
+the route bridges to `UserSpace`'s mutation-backed push. Mobile `sync.push`
+uses this typed HTTP contract. Live subscription remains on WebSocket.
+Expo/Cloudflare acceptance and two-device acceptance remain outstanding.
 
 ```text
 SyncSession.start(authenticated session, committed cursor)
@@ -159,8 +183,13 @@ the initial library adoption.
 
 ## 6. Turn service and supervisor — R1/U1
 
-Proposed Worker home: `src/application/turns.ts` with provider/stream adapters
-under `src/agent/`. The host composes these services; it does not run the model.
+Implemented in part: unary contract operations `startTurn`, `getTurn`, and
+`stopTurn` are mounted below `/api/turns`, and the host bridges them to
+UserSpace. Mobile invokes these operations through the typed HTTP client. The
+Worker supervisor persists turn state and recovery records, while observation
+remains a WebSocket stream. The target behaviors below remain the acceptance
+contract; deployed socket-disconnect and Durable Object restart acceptance have
+not been established.
 
 | Unary operation | Target input/output                                                                   |
 | --------------- | ------------------------------------------------------------------------------------- |
@@ -187,18 +216,54 @@ The change-card projection aggregates all committed events sharing the turn's
 batch ID. It survives reload and reports partial/skipped undo. Early Changes
 frames merge through the same durable repository as sync frames.
 
-Chat task presentation follows the [product reference](../product.md#tasks-inside-chat).
-Message content selects stable task references and optional commentary; the UI
-resolves current titles, statuses, and completion dates from committed local
-state. Status-based grouping is a live projection of those referenced tasks.
-Circle actions submit normal complete/reopen commands; title actions navigate to
-the task. Historical commentary is not written back into task fields. The list
-projection and the durable batch/change-summary projection remain separate.
+Chat task presentation follows the [product reference](../product.md#tasks-inside-chat)
+and the [task-widget plan](../plans/thread-task-widgets.md), updated 2026-11-10.
+Target: the permanent conversation (`PERSONAL_THREAD_ID`) embeds live task blocks
+by ID, with shared committed state, stable per-message list membership/order,
+task-detail overlays, and a bounded presentation window. Repeated occurrences
+share entity identity but have distinct rendering keys. Reopening is an ordinary
+status edit; whole-turn Undo remains batch/provenance based. No new transport
+contract is needed for local widgets.
+
+Proposed local facade contracts are defined in the
+[widget plan](../plans/thread-task-widgets.md#key-facades-and-contracts): F1
+`TaskInteractions` wraps committed reads/status writes and shared pending state;
+F2 `ThreadTimeline` wraps windowed messages/reference presentation; F3
+`TaskNavigation` wraps task overlays and project navigation; F4 `ThreadCapture`
+wraps atomic manual task/receipt batches. These are not implemented services.
+The [Gurki acceptance specs](../specs/thread-task-widgets.spec.md) carry stable
+scenario-family IDs mapped to implementation tasks and verification in that plan.
+They distinguish immediate behavior, outputs, outcomes, and possible next
+scenarios. Gurki validation is separate from application-test acceptance.
+
+Still implemented: the home tab opens at a collapsing global priority list;
+`selectThreadHistory` interleaves existing chat messages with completion
+transitions from the committed journal, retaining event-time titles and dates
+after later edits/reopening. The home renderer currently forces task links.
+Storage still hydrates/refolds full history; UI windowing alone will not bound
+that cost. Widget/window/overlay implementation and runtime acceptance are pending.
+
+`Task.tags` and `Chat.headings` remain
+optional v1 compatibility fields. `planProjectConsolidation` converts them through
+the serialized atomic writer, preserving explicit project assignments and leaving
+multi-tag tasks unassigned. Stable normalized-name IDs avoid duplicate migrated
+projects across offline clients. Original tag/heading values stay in event preimages.
+Live tasks group by `projectId`, with priority retained within and across groups.
+Optional project description, target date, and bookmarks flow through shared
+schemas, staged planning, folding, and provenance-aware Undo. New date commands
+reject impossible calendar dates without narrowing the legacy event reader.
+Circle actions submit normal completion commands; Undo reopens; title actions
+navigate to the task. Dropdown/slash capture and messages use the same atomic
+writer. Historical commentary, completion history, live tasks, and durable
+batch/change summaries are separate projections of committed state.
 
 ## 7. Model gateway and usage ledger — R2
 
-Existing code: core `tools.ts`, Worker `agent/openrouter.ts`, `agent/usage.ts`,
-duplicated accounting in `agent/turn.ts`.
+Implemented in part: Worker has a model gateway, usage ledger, and supervisor
+modules (`agent/modelGateway.ts`, `agent/usage.ts`, `agent/supervisor.ts`).
+`agent/turn.ts` remains in the runtime and some accounting/admission behavior
+must be reviewed against the target semantics below. Model/provider credentials
+and Cloudflare runtime acceptance remain outstanding.
 
 | Port                  | Required semantics                                                                 |
 | --------------------- | ---------------------------------------------------------------------------------- |
@@ -233,15 +298,52 @@ reporting what was truncated.
 
 ## 9. Identity and account lifecycle — I1
 
-`SessionLifecycle` owns sign-in/offline selection, account generation, sync
-shutdown, and local cleanup. `AccountService.delete(requestId)` owns durable
-deletion progress, turn/curator cancellation, write fencing, DO cleanup, and
-external Clerk deletion.
+Target: `SessionLifecycle` owns sign-in/offline selection, account generation,
+sync shutdown, and local cleanup. `AccountService.delete(requestId)` owns the
+full deletion workflow. `UserSpace` now migrates and uses the Worker
+`accountDeletion` SQLite record for pending/completed state and retry metadata,
+preserving it when event data is cleared. A retry repeats the remote Clerk
+delete while the record is pending; completed deletion is idempotent. The
+mutation service and user-space handlers check the lifecycle fence so stale
+mutations, turns, subscriptions, and callbacks are rejected. The mobile API
+still exposes a simple `account.delete` request rather than a status/polling receipt, and
+Cloudflare deletion/recreation behavior remains to be accepted in the real
+runtime.
 
 Return a receipt with operation identity and explicit pending/completed state,
 or a typed failure with recovery advice. Pending is not complete. The contract
 owner finalizes polling/retry semantics before implementation. Retain enough
 deletion progress to retry external failure; do not wipe the retry record first.
+
+## 10. Daily stack and player — proposed
+
+The [daily-stack plan](../plans/daily-stack-player.md) defines DS1 `DailyStack`
+(daily entries, order, allocation, atomic next-day transfer), DS2 `StackPlayer`
+(device-owned time intervals, playback, completion, clock/reminder ports), and
+DS3 `StackTemplates` (opening sequence, queue composition, automatic break reconciliation).
+The [Gurki model](../specs/daily-stack-player.spec.md) contains target scenarios;
+none of these facades or new records is implemented yet.
+
+Daily order/date are separate from `Task.position` and task due date. Linked
+task completion shares the mutation boundary with chat widgets; known local
+interval stop and daily entry resolution must commit with it. A run unseen on
+another offline device requires owner-side reconciliation, with effective stop
+time/clock-skew policy finalized in next-build N01; local atomicity cannot stop
+an unseen offline run. F1 and DS2 share the core batch planner rather than calling
+each other. Extend/requeue/defer does not
+complete a task. Templates prepend an opening while preserving the work queue;
+daily inbox assembly materializes the queue and configured automatic breaks once
+per day. Manual task/break edits take precedence over future reconciliation;
+suppression prevents removed breaks from immediately returning. Expanded-player
+scene selection is independent presentation/media state, not a timer command.
+
+This feature requires new core schemas/events/folds and explicit mobile/Worker
+cache/sync support. Final shared shapes and an old-client upgrade gate are DP0
+work, not an assumed property of existing sync. Preserve v1 task readers and
+never advance cursors past unsupported events. Keep core Effect-only, shared
+never-rest contracts for any changed unary boundary, and existing host-owned
+streams. Offline playback cannot promise one globally exclusive runner; retain
+and surface cross-device interval overlap.
 
 ## Error vocabulary at the boundary
 

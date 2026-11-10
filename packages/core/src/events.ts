@@ -23,6 +23,7 @@ import {
   Quadrant,
   Reason,
   TaskStatus,
+  TaskTags,
   TaskUpdatedFields,
   Title,
 } from "./schemas.ts";
@@ -64,6 +65,7 @@ export const TaskCreatedEvent = Schema.Struct({
   taskId: TaskId,
   projectId: Schema.NullOr(ProjectId),
   title: Title,
+  tags: Schema.optional(TaskTags),
   notes: Schema.optional(Notes),
   dueDate: Schema.optional(Schema.NullOr(Schema.String)),
   status: TaskStatus,

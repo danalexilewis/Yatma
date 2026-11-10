@@ -21,6 +21,7 @@ export type StoredEvent = Event & { readonly seq: number };
 
 export type PushReject =
   | { readonly _tag: "invalid_event"; readonly id?: string; readonly reason: string }
+  | { readonly _tag: "event_conflict"; readonly id: string; readonly reason: string }
   | { readonly _tag: "clock_skew"; readonly id: string; readonly at: string };
 
 export type PushResult =
@@ -129,16 +130,16 @@ function rowToStored(row: EventRow): StoredEvent | null {
   return { ...event, seq: row.seq };
 }
 
-/** Append events; duplicate ids are ignored; assigns increasing seq. */
+/**
+ * Validate the full request, then append and refold it in one SQLite
+ * transaction. A retry receives the original sequence for every event ID.
+ */
 export const pushEvents = Effect.fn("EventStore.pushEvents")(function* (
   rawEvents: readonly unknown[],
   nowIso: string,
 ) {
-  const sql = yield* SqlClient.SqlClient;
-  const accepted: EventId[] = [];
-  const assigned: Array<{ readonly id: EventId; readonly seq: number }> = [];
-  const touched = new Set<string>();
-
+  const events: Event[] = [];
+  const requestIds = new Map<string, string>();
   for (const raw of rawEvents) {
     const event = parseWireEvent(raw);
     if (!event) {
@@ -156,30 +157,111 @@ export const pushEvents = Effect.fn("EventStore.pushEvents")(function* (
     }
     const skew = rejectIfClockSkew(event, nowIso);
     if (skew) return { ok: false as const, reject: skew };
-
-    const entityId = entityIdOf(event);
     const payload = JSON.stringify(event);
-    const inserted = yield* sql<{ readonly seq: number }>`
-      INSERT INTO events (id, entity_id, at, payload)
-      VALUES (${event.id}, ${entityId}, ${event.at}, ${payload})
-      ON CONFLICT (id) DO NOTHING
-      RETURNING seq
-    `;
-    if (inserted.length === 0) continue;
-    const seq = inserted[0]!.seq;
-    accepted.push(event.id);
-    assigned.push({ id: event.id, seq });
-    touched.add(entityId);
+    const repeated = requestIds.get(event.id);
+    if (repeated !== undefined && repeated !== payload) {
+      return {
+        ok: false as const,
+        reject: { _tag: "event_conflict" as const, id: event.id, reason: "content_mismatch" },
+      };
+    }
+    requestIds.set(event.id, payload);
+    events.push(event);
   }
 
-  for (const entityId of touched) {
-    yield* refoldEntity(entityId);
-  }
+  return yield* appendPreparedEvents(events);
+});
 
-  return {
-    ok: true as const,
-    result: { accepted, assigned } satisfies SyncPushResult,
-  };
+/** Append trusted, planner-produced events using the same conflict rules as sync. */
+export const appendPlannedBatch = Effect.fn("EventStore.appendPlannedBatch")(function* (
+  events: readonly Event[],
+) {
+  for (const event of events) {
+    if (!parseWireEvent(event)) {
+      return {
+        ok: false as const,
+        reject: { _tag: "invalid_event" as const, id: event.id, reason: "decode_failed" },
+      };
+    }
+  }
+  return yield* appendPreparedEvents(events);
+});
+
+const appendPreparedEvents = Effect.fn("EventStore.appendPreparedEvents")(function* (
+  events: readonly Event[],
+) {
+  const sql = yield* SqlClient.SqlClient;
+  return yield* sql.withTransaction(
+    Effect.gen(function* () {
+      const accepted: EventId[] = [];
+      const assigned: Array<{ readonly id: EventId; readonly seq: number }> = [];
+      const touched = new Set<string>();
+      const assignedIds = new Set<string>();
+      const existingIds = new Set<string>();
+
+      for (const event of events) {
+        if (existingIds.has(event.id)) continue;
+        const rows = yield* sql<{ readonly seq: number; readonly payload: string }>`
+          SELECT seq, payload FROM events WHERE id = ${event.id}
+        `;
+        const row = rows[0];
+        if (!row) continue;
+        let existingEvent: Event | null = null;
+        try {
+          existingEvent = parseWireEvent(JSON.parse(row.payload));
+        } catch {
+          existingEvent = null;
+        }
+        if (!existingEvent || JSON.stringify(existingEvent) !== JSON.stringify(event)) {
+          return {
+            ok: false as const,
+            reject: { _tag: "event_conflict" as const, id: event.id, reason: "content_mismatch" },
+          };
+        }
+        existingIds.add(event.id);
+        assigned.push({ id: event.id, seq: row.seq });
+        assignedIds.add(event.id);
+      }
+
+      for (const event of events) {
+        if (existingIds.has(event.id)) continue;
+        const entityId = entityIdOf(event);
+        const payload = JSON.stringify(event);
+        const inserted = yield* sql<{ readonly seq: number }>`
+          INSERT INTO events (id, entity_id, at, payload)
+          VALUES (${event.id}, ${entityId}, ${event.at}, ${payload})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING seq
+        `;
+        if (inserted.length === 0) {
+          const rows = yield* sql<{ readonly seq: number }>`
+            SELECT seq FROM events WHERE id = ${event.id}
+          `;
+          const row = rows[0];
+          if (!row) throw new Error("event disappeared during append");
+          if (!assignedIds.has(event.id)) {
+            assigned.push({ id: event.id, seq: row.seq });
+            assignedIds.add(event.id);
+          }
+          continue;
+        }
+
+        if (!assignedIds.has(event.id)) {
+          accepted.push(event.id);
+          touched.add(entityId);
+          assigned.push({ id: event.id, seq: inserted[0]!.seq });
+          assignedIds.add(event.id);
+        }
+      }
+
+      for (const entityId of touched) yield* refoldEntity(entityId);
+
+      return {
+        ok: true as const,
+        result: { accepted, assigned } satisfies SyncPushResult,
+      };
+    }),
+  );
 });
 
 /** Events with seq > after, ordered by seq. */
@@ -273,7 +355,7 @@ export const loadAllEvents = Effect.gen(function* () {
     FROM events
     ORDER BY at ASC, id ASC
   `;
-  const events: Event[] = [];
+  const events: StoredEvent[] = [];
   for (const row of rows) {
     const stored = rowToStored(row);
     if (stored) events.push(stored);
@@ -301,9 +383,7 @@ export const eventsForEntity = Effect.fn("EventStore.eventsForEntity")(function*
 });
 
 /** Events that share a batch id (for undo). */
-export const eventsForBatch = Effect.fn("EventStore.eventsForBatch")(function* (
-  batchId: string,
-) {
+export const eventsForBatch = Effect.fn("EventStore.eventsForBatch")(function* (batchId: string) {
   const all = yield* loadAllEvents;
   return all.filter((event) => event.batch === batchId);
 });

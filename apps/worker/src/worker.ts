@@ -9,6 +9,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 
 import { optionalRedacted, verifyClerkRequest, type AuthConfig } from "./auth.ts";
 import { createHealthApi } from "./http/health.ts";
+import { createUserApi, type UserApiContext } from "./http/user.ts";
 import { UserSpace, UserSpaceLive } from "./UserSpace.ts";
 
 /**
@@ -35,7 +36,7 @@ export const ApiLive = Api.make(
     const openRouterModel = yield* Config.String("OPENROUTER_MODEL").pipe(
       Config.withDefault("openai/gpt-4o-mini"),
     );
-    const usageCap = yield* Config.Number("USAGE_MONTHLY_TOKEN_CAP").pipe(
+    const usageCap = yield* Config.Number("USAGE_DAILY_TOKEN_CAP").pipe(
       Config.withDefault(500_000),
     );
 
@@ -52,7 +53,7 @@ export const ApiLive = Api.make(
         CLERK_JWT_AUDIENCE: clerkJwtAudience ?? "yatma",
         OPENROUTER_API_KEY: openRouterApiKey ?? "",
         OPENROUTER_MODEL: openRouterModel,
-        USAGE_MONTHLY_TOKEN_CAP: String(usageCap),
+        USAGE_DAILY_TOKEN_CAP: String(usageCap),
       },
     };
   }).pipe(Effect.orDie),
@@ -70,7 +71,6 @@ export const ApiLive = Api.make(
       ),
       clerkJwtAudience: Option.getOrNull(yield* Config.option(Config.String("CLERK_JWT_AUDIENCE"))),
     };
-
     return {
       fetch: Effect.gen(function* () {
         const request = yield* HttpServerRequest;
@@ -84,6 +84,46 @@ export const ApiLive = Api.make(
             const response = yield* Effect.promise(() => healthApi(raw, undefined));
             return HttpServerResponse.fromWeb(response);
           }
+        }
+
+        const isUserApiRoute = url.pathname.startsWith("/api/sync/") || url.pathname.startsWith("/api/turns");
+        if (isUserApiRoute) {
+          const verified = yield* verifyClerkRequest(authConfig, raw).pipe(
+            Effect.mapError(() => undefined),
+            Effect.option,
+          );
+          const fallbackContext: UserApiContext = {
+            pushEvents: async () => { throw new Error("unavailable"); },
+            startTurn: async () => { throw new Error("unavailable"); },
+            getTurn: async () => { throw new Error("unavailable"); },
+            stopTurn: async () => { throw new Error("unavailable"); },
+          };
+          if (Option.isNone(verified)) {
+            const response = yield* Effect.promise(() =>
+              createUserApi(null)(raw, fallbackContext),
+            );
+            return HttpServerResponse.fromWeb(response);
+          }
+          const { userId } = verified.value;
+          const client = yield* userSpaces.getByName(userId);
+          const context: UserApiContext = {
+            pushEvents: (targetUserId, input) => targetUserId === userId
+              ? Effect.runPromise(client["sync.push"](input))
+              : Promise.reject(new Error("principal mismatch")),
+            startTurn: (targetUserId, input) => targetUserId === userId
+              ? Effect.runPromise(client["turn.start"](input))
+              : Promise.reject(new Error("principal mismatch")),
+            getTurn: (targetUserId, turnId) => targetUserId === userId
+              ? Effect.runPromise(client["turn.get"]({ turnId }))
+              : Promise.reject(new Error("principal mismatch")),
+            stopTurn: (targetUserId, input) => targetUserId === userId
+              ? Effect.runPromise(client["turn.stop"](input))
+              : Promise.reject(new Error("principal mismatch")),
+          };
+          const response = yield* Effect.promise(() =>
+            createUserApi({ userId })(raw, context),
+          );
+          return HttpServerResponse.fromWeb(response);
         }
 
         const verified = yield* verifyClerkRequest(authConfig, raw).pipe(

@@ -1,8 +1,8 @@
 import type { ProjectId, Quadrant, TaskStatus } from "@yatma/core";
-import { ProjectId as ProjectIdSchema, TaskId as TaskIdSchema } from "@yatma/core";
+import { ProjectId as ProjectIdSchema, TaskId as TaskIdSchema, quadrantLabel } from "@yatma/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useAppStore, useFoldedState } from "../../state/atoms";
 import {
@@ -12,7 +12,7 @@ import {
   selectTaskHistory,
 } from "../../state/selectors";
 import { useTheme } from "../../theme/theme";
-import { Row, Screen } from "../../ui";
+import { DateEditor, Row, Screen } from "../../ui";
 
 const STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done"];
 const QUADRANTS: ReadonlyArray<Quadrant | "inbox"> = [
@@ -29,7 +29,8 @@ export function TaskSheet() {
   const router = useRouter();
   const theme = useTheme();
   const folded = useFoldedState();
-  const { updateTask } = useAppStore();
+  const store = useAppStore();
+  const { updateTask } = store;
   const task = id ? selectTask(folded, id) : undefined;
   const project = task?.projectId ? selectProject(folded, task.projectId) : undefined;
   const projects = selectActiveProjects(folded);
@@ -38,6 +39,8 @@ export function TaskSheet() {
   const [draftKey, setDraftKey] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   if (task && draftKey !== task.id) {
     setDraftKey(task.id);
@@ -88,6 +91,39 @@ export function TaskSheet() {
     await updateTask({ taskId, projectId });
   }
 
+  async function deleteTask() {
+    if (deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await updateTask({ taskId, deleted: true });
+      if (router.canGoBack()) router.back();
+      else router.replace("/");
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : "Could not delete the task.");
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function recoverTask() {
+    try {
+      await store.executeLocalCommands([
+        {
+          type: "task.update",
+          input: {
+            taskId,
+            ...(currentTask.deletedAt ? { deleted: false } : {}),
+            ...(currentTask.status === "done" ? { status: "todo" as const } : {}),
+            reason: currentTask.deletedAt ? "Restored task" : "Reopened task",
+          },
+        },
+      ]);
+    } catch (error) {
+      Alert.alert("Could not recover task", error instanceof Error ? error.message : "Try again.");
+    }
+  }
+
   return (
     <Screen edges={["bottom"]}>
       <ScrollView
@@ -111,6 +147,19 @@ export function TaskSheet() {
           placeholder="Title"
           placeholderTextColor={theme.colors.muted}
         />
+
+        {currentTask.deletedAt || currentTask.status === "done" ? (
+          <Pressable
+            style={[styles.discuss, { backgroundColor: theme.colors.pine, marginTop: 16 }]}
+            onPress={() => void recoverTask()}
+          >
+            <Text
+              style={{ color: theme.colors.onPine, fontWeight: "600", fontSize: theme.type.row }}
+            >
+              {currentTask.deletedAt ? "Restore task" : "Reopen task"}
+            </Text>
+          </Pressable>
+        ) : null}
         <TextInput
           value={notes}
           onChangeText={setNotes}
@@ -126,6 +175,12 @@ export function TaskSheet() {
           placeholderTextColor={theme.colors.muted}
         />
 
+        <Text style={[styles.label, { color: theme.colors.muted }]}>Due date</Text>
+        <DateEditor
+          value={currentTask.dueDate}
+          onSave={(dueDate) => updateTask({ taskId, dueDate })}
+        />
+
         <Text style={[styles.label, { color: theme.colors.muted }]}>Status</Text>
         <View style={styles.choiceRow}>
           {STATUSES.map((status) => (
@@ -138,12 +193,12 @@ export function TaskSheet() {
           ))}
         </View>
 
-        <Text style={[styles.label, { color: theme.colors.muted }]}>Quadrant</Text>
+        <Text style={[styles.label, { color: theme.colors.muted }]}>Urgency & importance</Text>
         <View style={styles.choiceRow}>
           {QUADRANTS.map((quadrant) => (
             <Choice
               key={quadrant}
-              label={quadrant}
+              label={quadrantLabel(quadrant === "inbox" ? null : quadrant)}
               active={(currentTask.quadrant ?? "inbox") === quadrant}
               onPress={() => void setQuadrant(quadrant)}
             />
@@ -153,7 +208,7 @@ export function TaskSheet() {
         <Text style={[styles.label, { color: theme.colors.muted }]}>Project</Text>
         <View style={styles.choiceRow}>
           <Choice
-            label="None"
+            label="Unassigned"
             active={currentTask.projectId === null}
             onPress={() => void setProject(null)}
           />
@@ -175,8 +230,8 @@ export function TaskSheet() {
         <Pressable
           style={[styles.discuss, { backgroundColor: theme.colors.pine, marginTop: 20 }]}
           onPress={() =>
-            router.push({
-              pathname: "/(tabs)/chat",
+            router.dismissTo({
+              pathname: "/",
               params: { taskId: currentTask.id },
             })
           }
@@ -185,6 +240,21 @@ export function TaskSheet() {
             Discuss
           </Text>
         </Pressable>
+
+        {!currentTask.deletedAt ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Delete task"
+            disabled={deleting}
+            onPress={() => void deleteTask()}
+            style={[styles.discuss, { marginTop: 12 }]}
+          >
+            <Text style={{ color: theme.colors.danger, fontWeight: "600", fontSize: theme.type.row }}>
+              Delete task
+            </Text>
+          </Pressable>
+        ) : null}
+        {deleteError ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>{deleteError}</Text> : null}
 
         <Text style={[styles.label, { color: theme.colors.muted, marginTop: 28 }]}>History</Text>
         {history.length === 0 ? (

@@ -1,14 +1,10 @@
-import { buildContext, contextText } from "@yatma/core";
+import { buildContext, contextText, ProjectId } from "@yatma/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 
+import { ProjectTaskList, type ProjectTaskFilter } from "./ProjectTaskList";
 import { useFoldedState } from "../../state/atoms";
-import {
-  selectChats,
-  selectPages,
-  selectProject,
-  selectProjectTasks,
-} from "../../state/selectors";
+import { selectPages, selectProject } from "../../state/selectors";
 import { useTheme } from "../../theme/theme";
 import { EmptyState, Row, Screen } from "../../ui";
 
@@ -20,57 +16,16 @@ function useProject() {
 }
 
 export function ProjectTasksScreen() {
-  const router = useRouter();
-  const theme = useTheme();
-  const { id, folded, project } = useProject();
-  const tasks = id ? selectProjectTasks(folded, id) : [];
-
-  if (!project) return <MissingProject />;
-
+  const { id, project } = useProject();
+  const { filter } = useLocalSearchParams<{ filter?: ProjectTaskFilter }>();
+  if (!project || !id) return <MissingProject />;
   return (
     <Screen edges={[]}>
-      <ScrollView>
-        {tasks.length === 0 ? (
-          <EmptyState message="No open tasks." />
-        ) : (
-          tasks.map((task, index) => (
-            <Row
-              key={task.id}
-              title={task.title}
-              subtitle={task.status.replace("_", " ")}
-              last={index === tasks.length - 1}
-              onPress={() => router.push(`/task/${task.id}`)}
-            />
-          ))
-        )}
-      </ScrollView>
-    </Screen>
-  );
-}
-
-export function ProjectChatsScreen() {
-  const router = useRouter();
-  const { id, folded, project } = useProject();
-  const chats = selectChats(folded).filter((chat) => chat.projectId === id);
-
-  if (!project) return <MissingProject />;
-
-  return (
-    <Screen edges={[]}>
-      <ScrollView>
-        {chats.length === 0 ? (
-          <EmptyState message="No project chats yet." />
-        ) : (
-          chats.map((chat, index) => (
-            <Row
-              key={chat.id}
-              title={chat.title ?? "Untitled chat"}
-              last={index === chats.length - 1}
-              onPress={() => router.push(`/chat/${chat.id}`)}
-            />
-          ))
-        )}
-      </ScrollView>
+      <ProjectTaskList
+        key={`${id}:${filter ?? "all"}`}
+        projectId={ProjectId.make(id)}
+        initialFilter={filter ?? "all"}
+      />
     </Screen>
   );
 }
@@ -92,6 +47,7 @@ export function ProjectHandbookScreen() {
             <Row
               key={page.id}
               title={page.title}
+              subtitle={page.pinned ? "Pinned" : undefined}
               last={index === pages.length - 1}
               onPress={() => router.push(`/page/${page.id}`)}
             />
@@ -142,12 +98,13 @@ export function ProjectContextScreen() {
         Pinned pages
       </Text>
       {pinned.map((page) => (
-        <Text
+        <Row
           key={page.id}
-          style={{ color: theme.colors.ink, fontSize: theme.type.row, marginBottom: 6 }}
-        >
-          {page.title}
-        </Text>
+          title={page.title}
+          subtitle="Pinned page"
+          onPress={() => router.push(`/page/${page.id}`)}
+          style={{ marginHorizontal: -theme.space.screenX }}
+        />
       ))}
       {pinned.length === 0 ? (
         <Text style={{ color: theme.colors.muted, marginBottom: 12 }}>None pinned.</Text>

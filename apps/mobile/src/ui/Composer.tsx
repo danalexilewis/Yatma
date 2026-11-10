@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -24,9 +24,11 @@ type ComposerProps = {
   /** Extra inset when docked above a tab bar (home indicator already in tab bar). */
   readonly tabBarPad?: boolean;
   readonly autoFocus?: boolean;
+  readonly modeControl?: ReactNode;
+  readonly inputLabel?: string;
 };
 
-/** Docked pill composer: 16px input, mic always, send when nonempty. */
+/** Docked composer with an optional mode menu and trailing dictation/send actions. */
 export function Composer(props: ComposerProps) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -54,6 +56,7 @@ export function Composer(props: ComposerProps) {
         <View
           style={[
             styles.pill,
+            props.modeControl ? styles.withToolbar : undefined,
             {
               backgroundColor: theme.colors.surface,
               borderColor: focused ? theme.colors.pine : theme.colors.line,
@@ -61,16 +64,8 @@ export function Composer(props: ComposerProps) {
             },
           ]}
         >
-          {props.onMic ? (
-            <IconButton
-              name="mic-outline"
-              accessibilityLabel="Dictate"
-              color={theme.colors.pine}
-              onPress={props.onMic}
-              onLongPress={props.onMic}
-            />
-          ) : null}
           <TextInput
+            accessibilityLabel={props.inputLabel}
             value={props.value}
             onChangeText={props.onChangeText}
             placeholder={props.placeholder}
@@ -88,25 +83,54 @@ export function Composer(props: ComposerProps) {
             ]}
             returnKeyType="default"
           />
-          {props.busy && props.onStop ? (
-            <Pressable
-              onPress={props.onStop}
-              accessibilityLabel="Stop"
-              style={[styles.send, { backgroundColor: theme.colors.muted }]}
-            >
-              <Text style={{ color: theme.colors.onPine, fontWeight: "700", fontSize: 13 }}>
-                Stop
-              </Text>
-            </Pressable>
-          ) : canSend ? (
-            <Pressable
-              onPress={props.onSend}
-              accessibilityLabel="Send"
-              style={[styles.send, { backgroundColor: theme.colors.pine }]}
-            >
-              <Text style={{ color: theme.colors.onPine, fontWeight: "700", fontSize: 15 }}>↑</Text>
-            </Pressable>
-          ) : null}
+          <View style={[styles.actions, props.modeControl ? styles.toolbar : undefined]}>
+            {props.modeControl}
+            {props.modeControl ? <View style={{ flex: 1 }} /> : null}
+            {props.onMic ? (
+              <IconButton
+                name="mic-outline"
+                accessibilityLabel="Dictate"
+                color={theme.colors.pine}
+                onPress={props.onMic}
+              />
+            ) : null}
+            {props.busy && props.onStop ? (
+              <Pressable
+                onPress={props.onStop}
+                accessibilityLabel="Stop"
+                accessibilityRole="button"
+                hitSlop={6}
+                style={[styles.send, { backgroundColor: theme.colors.muted }]}
+              >
+                <Text style={{ color: theme.colors.onPine, fontWeight: "700", fontSize: 13 }}>
+                  Stop
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                onPress={props.onSend}
+                accessibilityLabel="Send"
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canSend }}
+                disabled={!canSend}
+                hitSlop={6}
+                style={[
+                  styles.send,
+                  { backgroundColor: canSend ? theme.colors.pine : theme.colors.line },
+                ]}
+              >
+                <Text
+                  style={{
+                    color: canSend ? theme.colors.onPine : theme.colors.muted,
+                    fontWeight: "700",
+                    fontSize: 18,
+                  }}
+                >
+                  ↑
+                </Text>
+              </Pressable>
+            )}
+          </View>
         </View>
       </View>
     </KeyboardAvoidingView>
@@ -133,6 +157,9 @@ const styles = StyleSheet.create({
     paddingVertical: Platform.OS === "ios" ? 10 : 8,
     lineHeight: 22,
   },
+  withToolbar: { flexDirection: "column", alignItems: "stretch", paddingHorizontal: 8 },
+  actions: { flexDirection: "row", alignItems: "center" },
+  toolbar: { width: "100%", paddingLeft: 2, paddingRight: 2 },
   send: {
     width: 36,
     height: 36,

@@ -1,6 +1,7 @@
 // Copyright (c) T3 Tools / MIT — adapted for Yatma
 import { describe, expect, it } from "@effect/vitest";
 import {
+  BatchId,
   ChatId,
   DeviceId,
   EventId,
@@ -12,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as EventStore from "../eventStore.ts";
 import * as NodeSqlite from "../testing/nodeSqlite.ts";
 import * as Tools from "./tools.ts";
+import { makeCommitHub, makeMutationService } from "../application/mutations.ts";
 
 const DEVICE = { kind: "user" as const, deviceId: DeviceId.make("device_test") };
 const CHAT = ChatId.make("c_AGENT001");
@@ -157,6 +159,85 @@ describe("agent/tools apply_changes", () => {
 
         const hits = yield* Tools.search({ query: "oat" });
         expect(hits.hits.some((hit) => hit.kind === "task")).toBe(true);
+      }),
+    ),
+  );
+
+  it.effect("mutation-backed undo restores its batch while preserving later edits", () =>
+    withStore(
+      Effect.gen(function* () {
+        const mutations = makeMutationService(yield* makeCommitHub);
+        const taskId = TaskId.make("t_ABCD0001");
+        const created = yield* mutations.executeBatch({
+          actor: DEVICE,
+          batchId: BatchId.make("batch_undo_seed"),
+          now: "2026-10-06T12:00:00.000Z",
+          commands: [{ type: "task.create", taskId, input: { title: "Original", notes: "Keep" } }],
+        });
+        const edited = yield* mutations.executeBatch({
+          actor: DEVICE,
+          batchId: BatchId.make("batch_undo_edit"),
+          now: "2026-10-06T12:01:00.000Z",
+          commands: [{ type: "task.update", input: { taskId, title: "Changed" } }],
+        });
+        yield* mutations.executeBatch({
+          actor: DEVICE,
+          batchId: BatchId.make("batch_undo_later"),
+          now: "2026-10-06T12:02:00.000Z",
+          commands: [{ type: "task.update", input: { taskId, notes: "Later edit" } }],
+        });
+
+        const undone = yield* Tools.applyChanges(
+          { reason: "Restore the title", ops: [{ op: "undo_batch", batchId: edited.batchId }] },
+          {
+            actor: AGENT,
+            batchId: BatchId.make("batch_undo_result"),
+            nowIso: "2026-10-06T12:03:00.000Z",
+            mutations,
+          },
+        );
+        expect(Tools.isToolFailure(undone)).toBe(false);
+        if (Tools.isToolFailure(undone)) return;
+        expect(undone.events).toHaveLength(1);
+        expect(undone.events[0]?.batch).toBe(BatchId.make("batch_undo_result"));
+        expect(undone.events[0]?.undoes).toBe(edited.batchId);
+        expect(undone.events[0]?.seq).toBeDefined();
+        const task = (yield* EventStore.loadFolded).tasks.get(taskId);
+        expect(task?.title).toBe("Original");
+        expect(task?.notes).toBe("Later edit");
+        expect(created.events).toHaveLength(1);
+      }),
+    ),
+  );
+
+  it.effect("mutation-backed page write commits one assigned atomic event", () =>
+    withStore(
+      Effect.gen(function* () {
+        const mutations = makeMutationService(yield* makeCommitHub);
+        const result = yield* Tools.writePage(
+          {
+            projectId: null,
+            kind: "brief",
+            title: "Alpha brief",
+            body: "One committed page",
+            pinned: true,
+            reason: "Create the project brief",
+          },
+          {
+            actor: AGENT,
+            batchId: BatchId.make("batch_page_atomic"),
+            nowIso: "2026-10-06T12:00:00.000Z",
+            mutations,
+          },
+        );
+        expect(Tools.isToolFailure(result)).toBe(false);
+        if (Tools.isToolFailure(result)) return;
+        expect(result.events).toHaveLength(1);
+        expect(result.events[0]?.seq).toBe(1);
+        expect(result.events[0]?.batch).toBe(BatchId.make("batch_page_atomic"));
+        expect((yield* EventStore.loadFolded).pages.get(result.page.id)?.body).toBe(
+          "One committed page",
+        );
       }),
     ),
   );
