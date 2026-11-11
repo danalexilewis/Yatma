@@ -1,3 +1,5 @@
+import { subscribeDatabaseChanges, withBrowserLock } from "../db/webCoordination";
+import { getDatabaseRuntime } from "../db/runtime";
 import type {
   BatchCommand,
   BatchId,
@@ -257,45 +259,47 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
     async function hydrate() {
       const generation = generationRef.current;
       try {
-        await openDatabase();
-        let hydrated = await hydrateLocalState();
-        if (cancelled || generation !== generationRef.current) return;
-
-        if (typeof __DEV__ !== "undefined" && __DEV__ && hydrated.folded.events.length === 0) {
-          const projectId = ProjectIdSchema.make(generateShortId("p_"));
-          const commands: BatchCommand[] = [
-            {
-              type: "project.create",
-              projectId,
-              input: { title: "Sample project", color: "#1F6B4A" },
-            },
-            {
-              type: "task.create",
-              taskId: TaskIdSchema.make(generateShortId("t_")),
-              input: { title: "Welcome to Yatma", projectId },
-            },
-            {
-              type: "task.create",
-              taskId: TaskIdSchema.make(generateShortId("t_")),
-              input: { title: "Hold a task to change its priority", projectId },
-            },
-            {
-              type: "task.create",
-              taskId: TaskIdSchema.make(generateShortId("t_")),
-              input: { title: "Place this task in the Eisenhower matrix", projectId: null },
-            },
-          ];
-          await mutationWriterRef.current!.execute(commands, localUserActor(hydrated.deviceId));
+        await withBrowserLock("yatma:bootstrap", async () => {
+          await openDatabase();
+          let hydrated = await hydrateLocalState();
           if (cancelled || generation !== generationRef.current) return;
-          hydrated = await hydrateLocalState();
-        }
 
-        if (cancelled || generation !== generationRef.current) return;
-        dispatch({
-          type: "hydrated",
-          folded: hydrated.folded,
-          deviceId: hydrated.deviceId,
-          lastSeenAt: hydrated.lastSeenAt,
+          if (typeof __DEV__ !== "undefined" && __DEV__ && hydrated.folded.events.length === 0) {
+            const projectId = ProjectIdSchema.make(generateShortId("p_"));
+            const commands: BatchCommand[] = [
+              {
+                type: "project.create",
+                projectId,
+                input: { title: "Sample project", color: "#1F6B4A" },
+              },
+              {
+                type: "task.create",
+                taskId: TaskIdSchema.make(generateShortId("t_")),
+                input: { title: "Welcome to Yatma", projectId },
+              },
+              {
+                type: "task.create",
+                taskId: TaskIdSchema.make(generateShortId("t_")),
+                input: { title: "Hold a task to change its priority", projectId },
+              },
+              {
+                type: "task.create",
+                taskId: TaskIdSchema.make(generateShortId("t_")),
+                input: { title: "Place this task in the Eisenhower matrix", projectId: null },
+              },
+            ];
+            await mutationWriterRef.current!.execute(commands, localUserActor(hydrated.deviceId));
+            if (cancelled || generation !== generationRef.current) return;
+            hydrated = await hydrateLocalState();
+          }
+
+          if (cancelled || generation !== generationRef.current) return;
+          dispatch({
+            type: "hydrated",
+            folded: hydrated.folded,
+            deviceId: hydrated.deviceId,
+            lastSeenAt: hydrated.lastSeenAt,
+          });
         });
       } catch (error) {
         if (cancelled || generation !== generationRef.current) return;
@@ -311,6 +315,23 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    return subscribeDatabaseChanges((databaseName) => {
+      if (databaseName !== getDatabaseRuntime().activeDatabaseName || !stateRef.current.ready)
+        return;
+      const generation = generationRef.current;
+      void hydrateLocalState()
+        .then((hydrated) => {
+          if (generation !== generationRef.current) return;
+          stateRef.current = { ...stateRef.current, ...hydrated };
+          dispatch({ type: "replaceFolded", folded: hydrated.folded });
+        })
+        .catch((error: unknown) => {
+          console.error("Could not refresh changes from another tab", error);
+        });
+    });
   }, []);
 
   async function dispatchLocalEvent(event: Event): Promise<void> {

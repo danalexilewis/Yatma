@@ -2,6 +2,7 @@ import type { SQLiteDatabase } from "expo-sqlite";
 import { Platform } from "react-native";
 
 import { DATABASE_NAME } from "./schema";
+import "./sharedTransport";
 
 type DatabaseRuntime = {
   databases: Map<string, Promise<SQLiteDatabase>>;
@@ -35,6 +36,7 @@ export function getDatabaseRuntime(): DatabaseRuntime {
 /** Claim Expo's entire OPFS pool before opening any account file; released on page exit. */
 export async function ensureWebStorageOwner(runtime: DatabaseRuntime): Promise<void> {
   if (Platform.OS !== "web") return;
+  if (typeof SharedWorker !== "undefined") return;
   if (!runtime.ownership) {
     const ownership = new Promise<void>((resolve, reject) => {
       if (typeof navigator === "undefined" || !navigator.locks) {
@@ -44,7 +46,7 @@ export async function ensureWebStorageOwner(runtime: DatabaseRuntime): Promise<v
         return;
       }
       void navigator.locks
-        .request("yatma:expo-sqlite", { mode: "exclusive", ifAvailable: true }, async (lock) => {
+        .request("yatma:expo-sqlite", { mode: "exclusive" }, async (lock) => {
           if (!lock) {
             const error = new Error("Local storage is already open in another tab.");
             error.name = "StorageInUseError";

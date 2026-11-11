@@ -70,23 +70,27 @@ describe("database initialization", () => {
     expect(openDatabaseAsync).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects a competing web tab before starting SQLite and retries after ownership is available", async () => {
+  it("waits for another web tab to release ownership before opening SQLite", async () => {
     platform.OS = "web";
-    let available = false;
-    const request = vi.fn(async (_name, _options, callback) =>
-      callback(available ? { name: "yatma:expo-sqlite" } : null),
-    );
+    let grant!: () => void;
+    const request = vi.fn((_name, options, callback) => {
+      expect(options).toEqual({ mode: "exclusive" });
+      return new Promise<void>((resolve) => {
+        grant = () => {
+          void callback({ name: "yatma:expo-sqlite" });
+          resolve();
+        };
+      });
+    });
     vi.stubGlobal("navigator", { locks: { request } });
     const database = connection();
     openDatabaseAsync.mockResolvedValue(database);
     const api = await import("./database");
-
-    await expect(api.openDatabase()).rejects.toThrow("another tab");
+    const pending = api.openDatabase();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     expect(openDatabaseAsync).not.toHaveBeenCalled();
-
-    available = true;
-    await expect(api.openDatabase()).resolves.toBe(database);
-    expect(request).toHaveBeenCalledTimes(2);
+    grant();
+    await expect(pending).resolves.toBe(database);
     expect(openDatabaseAsync).toHaveBeenCalledTimes(1);
   });
 

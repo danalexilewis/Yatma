@@ -36,12 +36,21 @@ pnpm -r typecheck
 Requires Node `^24` and pnpm `11.10.0`. Effect is pinned at `4.0.1`; alchemy at `2.0.0-beta.80`;
 never-rest at `0.7.0` and neverthrow at `8.2.0`.
 
-If web startup reports that Yatma is open elsewhere, close other Yatma tabs and
-windows on that origin, then choose **Reload**. Expo SQLite's web file pool has
-one owner per origin, across all account databases. Reload any older tabs after
-updating this code. This recovery preserves local data and unsent edits; clearing
-browser storage is unnecessary for a file-lock failure. Storage errors keep the
-workspace closed until its database opens successfully.
+Web tabs and previews share one SQLite worker through a SharedWorker broker.
+Committed changes refresh other tabs automatically, and writes are serialized
+across tabs. The existing OPFS files and unsent edits are preserved. Expo's OPFS
+adapter requires a dedicated worker, hosted by one tab; when that tab exits,
+remaining tabs automatically reload and reopen committed data. Unsaved form drafts
+can be lost during that reconnect. Browsers without SharedWorker retain the
+single-tab fallback.
+
+After upgrading from the old single-tab version, close older Yatma tabs once so
+the broker can claim their storage lock. Thereafter multiple tabs can stay open.
+No Worker deployment, Clerk configuration, or cloud database is required for local
+tasks and focus mode. Chat/model requests and signed-in sync need their configured
+backend services.
+
+Storage errors keep the workspace closed until its database opens successfully.
 
 The [storage and DX plan](docs/plans/storage-and-dx.md) records the startup fix,
 remaining acceptance, and the Turso sync evaluation.

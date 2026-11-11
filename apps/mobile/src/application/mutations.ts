@@ -1,3 +1,4 @@
+import { withBrowserLock } from "../db/webCoordination";
 import {
   DeviceId,
   BatchId as BatchIdSchema,
@@ -55,7 +56,7 @@ export function createLocalMutationWriter(deps: LocalMutationWriterDeps) {
     });
     await previous;
     try {
-      return await operation();
+      return await withBrowserLock("yatma:mutation-planning", operation);
     } finally {
       release();
     }

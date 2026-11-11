@@ -31,6 +31,7 @@ import {
   type EventRow,
 } from "./schema";
 import { ensureWebStorageOwner, getDatabaseRuntime } from "./runtime";
+import { withBrowserLock, notifyDatabaseChanged } from "./webCoordination";
 
 const DEVICE_ID_META_KEY = "deviceId";
 const runtime = getDatabaseRuntime();
@@ -38,6 +39,7 @@ const runtime = getDatabaseRuntime();
 /** Serialize every local journal mutation across snapshot, commit, and cache work. */
 export async function withLocalWriteLock<A>(
   task: (databaseName: string) => Promise<A>,
+  notify = true,
 ): Promise<A> {
   const databaseName = runtime.activeDatabaseName;
   const previous = runtime.writeTail;
@@ -47,7 +49,11 @@ export async function withLocalWriteLock<A>(
   });
   await previous;
   try {
-    return await task(databaseName);
+    return await withBrowserLock("yatma:database-operation", async () => {
+      const result = await task(databaseName);
+      if (notify) notifyDatabaseChanged(databaseName);
+      return result;
+    });
   } finally {
     release();
   }
@@ -376,7 +382,7 @@ export async function hydrateLocalState(): Promise<HydratedLocalState> {
       await runExclusive(database, async (tx) => writeEntityRows(tx, folded));
     }
     return { folded, deviceId, lastSeenAt: lastSeenAtFromEvents(events) };
-  });
+  }, false);
 }
 
 /** Load all events ordered for folding. */

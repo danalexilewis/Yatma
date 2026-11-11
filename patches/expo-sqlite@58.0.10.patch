@@ -1,0 +1,37 @@
+diff --git a/web/SQLiteModule.ts b/web/SQLiteModule.ts
+index d87f8c17e36ea6b8c1645b11df9f3faaf1e5fa1b..ec2424d7f781959d0298d07e7a395422efe2767f 100644
+--- a/web/SQLiteModule.ts
++++ b/web/SQLiteModule.ts
+@@ -20,7 +20,11 @@ let nextNativeSessionId = 0;
+ 
+ function getWorker(): Worker {
+   if (!worker) {
+-    worker = new Worker(new URL('./worker', window.location.href));
++    // Yatma supplies a shared transport; native and other consumers keep Expo's worker.
++    const sharedFactory = (globalThis as any).__yatmaCreateSQLiteWorker;
++    worker = sharedFactory
++      ? sharedFactory(new URL(require.unstable_resolveWorker('./worker'), window.location.href))
++      : new Worker(new URL('./worker', window.location.href));
+     worker.addEventListener('message', (event) => {
+       if (event.data.type === 'onDatabaseChange') {
+         // @ts-expect-error EventEmitter type for NativeModule is not inferred correctly on web.
+diff --git a/web/worker.ts b/web/worker.ts
+index 5981c0502c0597f84c2fca891741857b6dc885d1..4291475ce7dd37b72cbdce7860de37d5c632de73 100644
+--- a/web/worker.ts
++++ b/web/worker.ts
+@@ -62,6 +62,15 @@ const sessionIdMap = new Map<number, SessionEntity>();
+ class SQLiteErrorException extends Error {}
+ 
+ self.onmessage = async (event: MessageEvent<SQLiteWorkerMessage>) => {
++  // A SharedWorker broker transfers a port from the owning page's dedicated worker.
++  if ((event.data as any).type === 'yatma:attach') {
++    const port = (event.data as any).port as MessagePort;
++    const handler = self.onmessage!;
++    self.postMessage = ((message: unknown) => port.postMessage(message)) as typeof self.postMessage;
++    port.onmessage = (message) => handler.call(self, message);
++    port.start();
++    return;
++  }
+   let result: ResultType | null = null;
+   let error: Error | null = null;
+   try {

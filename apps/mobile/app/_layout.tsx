@@ -5,7 +5,7 @@ import { RegistryProvider } from "@effect/atom-react";
 import * as Linking from "expo-linking";
 import { Stack, useRouter } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Platform, Text, useColorScheme, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -95,12 +95,23 @@ export default function RootLayout() {
 
 function StorageGate(props: { readonly children: ReactNode }) {
   const { state, switchLocalAccount } = useAppStore();
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => {
+    if (state.ready || Platform.OS !== "web") return;
+    const timer = setTimeout(() => setWaiting(true), 1500);
+    return () => clearTimeout(timer);
+  }, [state.ready]);
 
   if (!state.ready) {
     return (
       <View style={{ flex: 1 }} accessibilityRole={state.storageError ? "alert" : undefined}>
         <EmptyState
-          message={state.storageError ?? "Opening your local workspace…"}
+          message={
+            state.storageError ??
+            (waiting
+              ? "Waiting for local storage. Close any Yatma tabs running an older version; this workspace will open automatically."
+              : "Opening your local workspace…")
+          }
           actionLabel={
             state.storageError ? (Platform.OS === "web" ? "Reload" : "Retry") : undefined
           }

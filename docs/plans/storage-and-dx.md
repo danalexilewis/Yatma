@@ -1,6 +1,6 @@
 # Storage and development startup
 
-Status: startup improvements implemented; Turso evaluation proposed. Started
+Status: multi-tab shared SQLite bridge implemented; Turso evaluation proposed. Started
 2026-10-17. This extends the [private-alpha plan](private-alpha.md); it does not
 change its storage or two-device acceptance gates.
 
@@ -51,6 +51,43 @@ Implemented in this pass:
 The current web adapter supports one active workspace tab per origin. A second
 active tab requires a shared worker or an adapter with verified concurrent-tab
 support; the ownership guard makes the present limitation explicit.
+
+## Multi-tab update — 2026-11-12
+
+The single-tab behavior above describes the original guard and is superseded on
+browsers with SharedWorker support.
+
+Implemented: `public/sqlite-broker.js` owns the origin-wide OPFS lease and routes
+each tab's Expo worker messages with separate request/database/statement/session
+IDs. A small pinned `expo-sqlite@58.0.10` patch adds a transport hook and a
+MessagePort attachment. SQLite still runs in a dedicated worker hosted by one
+page: this browser's SharedWorker scope cannot construct a Worker itself.
+The broker coordinates that worker through a transferred MessagePort.
+
+Cross-tab Web Locks serialize storage operations, mutation snapshot/planning/
+commit/publication, and first-run development seeding. BroadcastChannel notices
+rehydrate other tabs after successful storage operations; account-generation
+checks fence stale refreshes. Native keeps its existing SQLite implementation.
+Browsers lacking SharedWorker retain the single-tab guard.
+
+When the hosting tab exits or crashes, its Web Lock lease ends. Remaining tabs
+automatically reload and reopen committed data using a newly hosted worker.
+Unsaved form drafts may be lost in that reload. This is a recovery boundary,
+not uninterrupted worker ownership. The existing OPFS files and outbox remain
+in place; upgrading requires older single-tab pages to exit once.
+
+Verified in the collaborative Chromium browser on a separate local test origin:
+two Today tabs opened together; adding an activity in one appeared in the other
+without manual reload; closing the worker-hosting tab automatically reloaded
+the remaining tab with the committed activity intact. These checks do not
+establish Safari/Firefox, native, authenticated sync, or deployed acceptance.
+Broker regressions cover colliding client IDs, host lease loss, and rollback of
+a crashed secondary tab before another tab enters its transaction. Concurrent
+queued activity additions from both browser tabs were also retained in both
+views. On Node 24.22.2, repository typechecks, boundary checks and spec lint
+passed. The full suite had 372 passing tests and two failures in the outstanding
+Today row hover and linked review decision tests, outside this storage change.
+Native and deployed acceptance remain open.
 
 ## Database direction
 
