@@ -57,7 +57,7 @@ function harness() {
   const mergeRemoteEvents = vi.fn(async () => {});
   function start() {
     return startSyncEngine({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       deviceId: "device-test",
       onStatus: (status) => {

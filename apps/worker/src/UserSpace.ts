@@ -26,6 +26,7 @@ import * as Supervisor from "./agent/supervisor.ts";
 import * as Usage from "./agent/usage.ts";
 import * as AccountDeletion from "./application/accountDeletion.ts";
 import * as Mutations from "./application/mutations.ts";
+import * as ModelSettings from "./application/modelSettings.ts";
 import { deleteClerkUser } from "./auth.ts";
 import * as Curator from "./curator.ts";
 import * as EventStore from "./eventStore.ts";
@@ -47,6 +48,9 @@ export const UserSpaceLive = UserSpace.make(
     const openRouterKey = Option.getOrNull(
       yield* Config.option(Config.String("OPENROUTER_API_KEY")),
     );
+    const encryptionSecret = Option.getOrNull(
+      yield* Config.option(Config.String("AI_SETTINGS_ENCRYPTION_KEY")),
+    );
     const whisperUrl = Option.getOrNull(yield* Config.option(Config.String("WHISPER_API_URL")));
     const whisperKey = Option.getOrNull(yield* Config.option(Config.String("WHISPER_API_KEY")));
 
@@ -64,6 +68,7 @@ export const UserSpaceLive = UserSpace.make(
 
       yield* EventStore.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* Usage.migrate.pipe(Effect.provide(sql), Effect.orDie);
+      yield* ModelSettings.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* Gmail.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* ReviewSchedule.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* Supervisor.migrate.pipe(Effect.provide(sql), Effect.orDie);
@@ -90,6 +95,31 @@ export const UserSpaceLive = UserSpace.make(
 
       const commitHub = yield* Mutations.makeCommitHub;
       const mutations = Mutations.makeMutationService(commitHub, ensureAccountActive);
+      const modelSettings = ModelSettings.makeModelSettings({
+        userId,
+        encryptionSecret,
+        serverKey: openRouterKey,
+        defaultModel: model,
+      });
+      const resolveModel = () =>
+        ensureAccountActive().pipe(
+          Effect.andThen(modelSettings.resolve),
+          Effect.flatMap((config) =>
+            config.openRouterKey
+              ? Effect.succeed(config)
+              : Effect.fail(
+                  new InternalError({
+                    message: "Add an OpenRouter API key in Settings to use AI chat.",
+                  }),
+                ),
+          ),
+          Effect.provide(sql),
+          Effect.mapError((error) =>
+            error instanceof InternalError
+              ? error
+              : new InternalError({ message: "model_settings_unavailable" }),
+          ),
+        );
       const reviewLock = yield* Semaphore.make(1);
       const gmailLock = yield* Semaphore.make(1);
       const gmail = Gmail.makeGmailService(
@@ -151,6 +181,7 @@ export const UserSpaceLive = UserSpace.make(
         mutations,
         model,
         openRouterKey,
+        resolveModel,
         scheduleBackground: (work) => state.waitUntil(work),
       });
       yield* supervisor.recover;
@@ -162,11 +193,12 @@ export const UserSpaceLive = UserSpace.make(
             yield* ensureAccountActive();
             const currentChatId = yield* EventStore.getMeta("curator.pendingChatId");
             if (currentChatId !== payload.chatId) return;
+            const config = yield* resolveModel();
+            if (!config.openRouterKey) return;
             yield* Curator.executeWrapUp({
               chatId: payload.chatId,
               trigger: "idle_alarm",
-              model,
-              openRouterKey,
+              ...config,
               mutations,
             });
           }).pipe(
@@ -195,6 +227,23 @@ export const UserSpaceLive = UserSpace.make(
       }
 
       return SpaceRpcGroup.toLayer({
+        "model.settings.get": () =>
+          ensureAccountActive().pipe(
+            Effect.andThen(modelSettings.get),
+            Effect.mapError(() => new InternalError({ message: "model_settings_unavailable" })),
+          ),
+        "model.settings.save": (input) =>
+          commitHub
+            .exclusive(ensureAccountActive().pipe(Effect.andThen(modelSettings.save(input))))
+            .pipe(
+              Effect.mapError(() => new InternalError({ message: "model_settings_unavailable" })),
+            ),
+        "model.settings.remove": () =>
+          commitHub
+            .exclusive(ensureAccountActive().pipe(Effect.andThen(modelSettings.remove)))
+            .pipe(
+              Effect.mapError(() => new InternalError({ message: "model_settings_unavailable" })),
+            ),
         "review.schedule.get": () => reviewOperation(ReviewSchedule.readSchedule),
         "review.schedule.set": (input) =>
           reviewOperation(
@@ -313,6 +362,7 @@ export const UserSpaceLive = UserSpace.make(
           text,
           events,
           eventSchemaVersion,
+          planning,
         }) =>
           Effect.gen(function* () {
             yield* ensureAccountActive();
@@ -334,6 +384,7 @@ export const UserSpaceLive = UserSpace.make(
                 projectId,
                 text,
                 events,
+                ...(planning ? { planning } : {}),
               })
               .pipe(Effect.mapError((err) => new InvalidRequest({ message: String(err) })));
             yield* scheduleIdle(receipt.chatId);
@@ -389,11 +440,11 @@ export const UserSpaceLive = UserSpace.make(
           Effect.gen(function* () {
             yield* ensureAccountActive();
             yield* ensureEventReader(eventSchemaVersion);
+            const config = yield* resolveModel();
             const result = yield* Curator.executeWrapUp({
               chatId,
               trigger: "user",
-              model,
-              openRouterKey,
+              ...config,
               mutations,
             }).pipe(Effect.mapError(() => new InternalError({ message: "wrap_up_failed" })));
             yield* scheduleIdle(chatId);
@@ -443,6 +494,9 @@ export const UserSpaceLive = UserSpace.make(
                 );
             }
             yield* supervisor.stopAll.pipe(
+              Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+            );
+            yield* modelSettings.remove.pipe(
               Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
             );
             yield* EventStore.clearAll.pipe(
@@ -501,6 +555,11 @@ export const UserSpaceLive = UserSpace.make(
                 }),
               );
             }
+            if (new URL(whisperUrl).protocol !== "https:") {
+              return yield* Effect.fail(
+                new InternalError({ message: "Transcription requires an HTTPS provider URL." }),
+              );
+            }
 
             const mimeType = payload.mimeType ?? "audio/m4a";
             const apiKey = whisperKey ?? openRouterKey;
@@ -512,7 +571,12 @@ export const UserSpaceLive = UserSpace.make(
                 form.append("model", "whisper-1");
                 const headers: Record<string, string> = {};
                 if (apiKey) headers.authorization = `Bearer ${apiKey}`;
-                const res = await fetch(whisperUrl, { method: "POST", headers, body: form });
+                const res = await fetch(whisperUrl, {
+                  method: "POST",
+                  headers,
+                  body: form,
+                  redirect: "error",
+                });
                 if (!res.ok) throw new Error(`http_${res.status}`);
                 const json = (await res.json()) as { text?: string };
                 return { text: json.text ?? "" };

@@ -9,6 +9,7 @@ import {
   type TurnStatus,
   ChatId as ChatIdSchema,
   InvalidRequest,
+  InternalError,
 } from "@yatma/core";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -113,6 +114,14 @@ export function makeSupervisor<R = never>(input: {
   readonly mutations: MutationService;
   readonly model: string;
   readonly openRouterKey: string | null;
+  /** Production resolves account credentials per turn, without persisting them in turn input. */
+  readonly resolveModel?: () => Effect.Effect<
+    {
+      readonly model: string;
+      readonly openRouterKey: string | null;
+    },
+    InternalError
+  >;
   readonly gateway?: ModelGateway;
   readonly scheduleBackground?: (
     work: Effect.Effect<void, never, R>,
@@ -150,7 +159,19 @@ export function makeSupervisor<R = never>(input: {
       const turnInput = parseRowInput(row.input);
       return Effect.gen(function* () {
         const resultText = yield* Ref.make("");
-        const emittedDone = yield* Ref.make(false);
+        const resolved = input.resolveModel
+          ? yield* input.resolveModel().pipe(Effect.result)
+          : Result.succeed(input);
+        if (Result.isFailure(resolved)) {
+          yield* setStatus(turnId, "failed", null, resolved.failure.message);
+          yield* appendFrame(turnId, {
+            kind: "done",
+            chatId: ChatIdSchema.make(row.chat_id),
+            turnId,
+          });
+          return;
+        }
+        const config = resolved.success;
         const outcome = yield* Stream.runForEach(
           Turn.runAgentTurn({
             chatId: ChatIdSchema.make(row.chat_id),
@@ -161,8 +182,8 @@ export function makeSupervisor<R = never>(input: {
             requestId: turnInput.requestId,
             batchId: row.batch_id,
             turnId,
-            model: input.model,
-            openRouterKey: input.openRouterKey,
+            model: config.model,
+            openRouterKey: config.openRouterKey,
             signal: controller.signal,
             mutations: input.mutations,
             ...(input.gateway ? { gateway: input.gateway } : {}),
@@ -171,8 +192,7 @@ export function makeSupervisor<R = never>(input: {
             Effect.gen(function* () {
               if (item.kind === "text_delta")
                 yield* Ref.update(resultText, (text) => text + item.text);
-              if (item.kind === "done") yield* Ref.set(emittedDone, true);
-              if (item.kind !== "started") {
+              if (item.kind !== "started" && item.kind !== "done") {
                 yield* appendFrame(turnId, item).pipe(Effect.provide(input.sqlLayer));
               }
             }),
@@ -185,16 +205,15 @@ export function makeSupervisor<R = never>(input: {
             turnOutcome.failure._tag === "Internal"
               ? turnOutcome.failure.message
               : "budget_exceeded";
-        if (!(yield* Ref.get(emittedDone))) {
-          const chatId = ChatIdSchema.make(row.chat_id);
-          yield* appendFrame(turnId, { kind: "done", chatId, turnId }).pipe(
-            Effect.provide(input.sqlLayer),
-          );
-        }
         const status = statusForItems(controller.signal.aborted, error);
         yield* setStatus(turnId, status, (yield* Ref.get(resultText)) || null, error).pipe(
           Effect.provide(input.sqlLayer),
         );
+        yield* appendFrame(turnId, {
+          kind: "done",
+          chatId: ChatIdSchema.make(row.chat_id),
+          turnId,
+        }).pipe(Effect.provide(input.sqlLayer));
       }).pipe(
         Effect.catchCause((cause) =>
           setStatus(turnId, "failed", null, String(cause)).pipe(
@@ -376,7 +395,9 @@ export function makeSupervisor<R = never>(input: {
             ),
             Stream.map(({ seq, item }) => ({ seq, item })),
           );
-          return Stream.concat(Stream.fromIterable(initial), live);
+          return Stream.concat(Stream.fromIterable(initial), live).pipe(
+            Stream.takeUntil((frame) => frame.item.kind === "done"),
+          );
         }),
       );
 

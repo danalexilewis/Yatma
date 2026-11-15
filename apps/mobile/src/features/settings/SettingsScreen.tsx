@@ -9,6 +9,9 @@ import { getSyncEngine } from "../../sync/engine";
 import { getAutoSendDictation, setAutoSendDictation } from "./autoSendPreference";
 import { useTheme } from "../../theme/theme";
 import { Screen } from "../../ui";
+import { Link } from "expo-router";
+import { ModelSettingsPanel } from "./ModelSettingsPanel";
+import { useAppStore } from "../../state/atoms";
 
 function isClerkConfigured(): boolean {
   return Boolean(process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim());
@@ -61,6 +64,7 @@ function SettingsBody(props: {
   readonly onDeleteAccount: () => Promise<void>;
 }) {
   const theme = useTheme();
+  const { state } = useAppStore();
   const [autoSend, setAutoSend] = useState(false);
   const [busy, setBusy] = useState(false);
   const [pingResult, setPingResult] = useState<PingResult | null>(null);
@@ -178,6 +182,15 @@ function SettingsBody(props: {
         <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
           {props.email ?? (props.signedIn ? "Signed in" : "Signed out")}
         </Text>
+        {!props.signedIn ? (
+          <Link href="/(auth)/sign-in" style={{ color: theme.colors.pine, marginTop: 10 }}>
+            Sign in to connect your devices
+          </Link>
+        ) : null}
+      </Section>
+
+      <Section title="AI chat">
+        <ModelSettingsPanel key={state.accountId ?? "anonymous"} />
       </Section>
 
       <Section title="Usage today">

@@ -8,8 +8,15 @@ function withDevelopmentStorageReset(middleware) {
       address === "::1" || address === "127.0.0.1" || address === "::ffff:127.0.0.1";
     const localHost = /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(req.headers.host ?? "");
     const origin = req.headers.origin;
-    const sameOrigin = !origin || origin === `http://${req.headers.host}`;
-    if (process.env.NODE_ENV === "production" || !localAddress || !localHost || !sameOrigin) {
+    const sameOrigin = !origin || origin === `https://${req.headers.host}`;
+    const secure = req.socket.encrypted === true;
+    if (
+      process.env.NODE_ENV === "production" ||
+      !secure ||
+      !localAddress ||
+      !localHost ||
+      !sameOrigin
+    ) {
       res.writeHead(404);
       res.end();
       return;

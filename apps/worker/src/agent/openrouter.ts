@@ -24,6 +24,13 @@ export type OpenRouterConfig = {
   readonly baseUrl?: string;
 };
 
+function completionUrl(config: OpenRouterConfig): string {
+  const url = new URL(config.baseUrl ?? "https://openrouter.ai/api/v1");
+  if (url.protocol !== "https:" || url.username || url.password)
+    throw new Error("HTTPS model endpoint required");
+  return `${url.toString().replace(/\/$/, "")}/chat/completions`;
+}
+
 export type ChatMessage = {
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
@@ -62,17 +69,25 @@ export function makeOpenRouterLanguageModel(config: OpenRouterConfig) {
       try: async () => {
         const messages = options.prompt.content.map((message) => {
           if (message.role === "assistant") {
-            const content = message.content.map((part) =>
-              part.type === "text" ? part.text : "",
-            ).join("");
+            const content = message.content
+              .map((part) => (part.type === "text" ? part.text : ""))
+              .join("");
             const toolCalls = message.content.flatMap((part) =>
-              part.type === "tool-call" ? [{
-                id: part.id,
-                type: "function" as const,
-                function: { name: part.name, arguments: JSON.stringify(part.params) },
-              }] : [],
+              part.type === "tool-call"
+                ? [
+                    {
+                      id: part.id,
+                      type: "function" as const,
+                      function: { name: part.name, arguments: JSON.stringify(part.params) },
+                    },
+                  ]
+                : [],
             );
-            return { role: "assistant", content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) };
+            return {
+              role: "assistant",
+              content,
+              ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+            };
           }
           if (message.role === "tool") {
             return { role: "tool", content: JSON.stringify(message.content), tool_call_id: "tool" };
@@ -87,9 +102,13 @@ export function makeOpenRouterLanguageModel(config: OpenRouterConfig) {
             parameters: Tool.getJsonSchema(tool),
           },
         }));
-        const response = await fetch(`${config.baseUrl ?? "https://openrouter.ai/api/v1"}/chat/completions`, {
+        const response = await fetch(completionUrl(config), {
+          redirect: "error",
           method: "POST",
-          headers: { authorization: `Bearer ${Redacted.value(config.apiKey)}`, "content-type": "application/json" },
+          headers: {
+            authorization: `Bearer ${Redacted.value(config.apiKey)}`,
+            "content-type": "application/json",
+          },
           body: JSON.stringify({
             model: config.model,
             messages,
@@ -97,8 +116,11 @@ export function makeOpenRouterLanguageModel(config: OpenRouterConfig) {
           }),
         });
         if (!response.ok) throw new Error(`http_${response.status}`);
-        const data = await response.json() as {
-          choices?: Array<{ finish_reason?: string | null; message?: { content?: string | null; tool_calls?: readonly ToolCall[] } }>;
+        const data = (await response.json()) as {
+          choices?: Array<{
+            finish_reason?: string | null;
+            message?: { content?: string | null; tool_calls?: readonly ToolCall[] };
+          }>;
           usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
         };
         const choice = data.choices?.[0];
@@ -106,8 +128,18 @@ export function makeOpenRouterLanguageModel(config: OpenRouterConfig) {
         if (choice?.message?.content) parts.push({ type: "text", text: choice.message.content });
         for (const call of choice?.message?.tool_calls ?? []) {
           let params: unknown = {};
-          try { params = JSON.parse(call.function.arguments) as unknown; } catch { /* Toolkit validation returns declared tool failure. */ }
-          parts.push({ type: "tool-call", id: call.id, name: call.function.name, params, providerExecuted: false });
+          try {
+            params = JSON.parse(call.function.arguments) as unknown;
+          } catch {
+            /* Toolkit validation returns declared tool failure. */
+          }
+          parts.push({
+            type: "tool-call",
+            id: call.id,
+            name: call.function.name,
+            params,
+            providerExecuted: false,
+          });
         }
         parts.push({
           type: "finish",
@@ -119,18 +151,20 @@ export function makeOpenRouterLanguageModel(config: OpenRouterConfig) {
         });
         return parts;
       },
-      catch: (cause) => new AiError.AiError({
-        module: "OpenRouter",
-        method: "generateText",
-        reason: new AiError.UnknownError({ description: String(cause) }),
-      }),
+      catch: (cause) =>
+        new AiError.AiError({
+          module: "OpenRouter",
+          method: "generateText",
+          reason: new AiError.UnknownError({ description: String(cause) }),
+        }),
     });
 
   return LanguageModel.make({
     generateText: call as never,
-    streamText: ((options: LanguageModel.ProviderOptions) => Stream.fromEffect(call(options)).pipe(
-      Stream.flatMap((parts) => Stream.fromIterable(parts)),
-    )) as never,
+    streamText: ((options: LanguageModel.ProviderOptions) =>
+      Stream.fromEffect(call(options)).pipe(
+        Stream.flatMap((parts) => Stream.fromIterable(parts)),
+      )) as never,
   });
 }
 
@@ -155,7 +189,6 @@ export function completeChat(
 ) {
   return Effect.tryPromise({
     try: async () => {
-      const base = config.baseUrl ?? "https://openrouter.ai/api/v1";
       const body: Record<string, unknown> = {
         model: config.model,
         messages: messages.map((message) => {
@@ -173,6 +206,7 @@ export function completeChat(
         body.tool_choice = "auto";
       }
       const init: RequestInit = {
+        redirect: "error",
         method: "POST",
         headers: {
           authorization: `Bearer ${Redacted.value(config.apiKey)}`,
@@ -181,7 +215,7 @@ export function completeChat(
         body: JSON.stringify(body),
       };
       if (options?.signal) init.signal = options.signal;
-      const response = await fetch(`${base}/chat/completions`, init);
+      const response = await fetch(completionUrl(config), init);
       if (!response.ok) {
         throw new Error(`http_${response.status}`);
       }
@@ -213,9 +247,15 @@ export function streamChat(
   config: OpenRouterConfig,
   messages: readonly ChatMessage[],
   options?: { readonly tools?: readonly ToolDef[]; readonly signal?: AbortSignal },
-): Stream.Stream<{ readonly type: "text"; readonly text: string } | { readonly type: "tool_call"; readonly call: ToolCall } | { readonly type: "usage"; readonly tokens: number }, OpenRouterError> {
+): Stream.Stream<
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "tool_call"; readonly call: ToolCall }
+  | { readonly type: "usage"; readonly tokens: number },
+  OpenRouterError
+> {
   const iterable = async function* () {
-    const response = await fetch(`${config.baseUrl ?? "https://openrouter.ai/api/v1"}/chat/completions`, {
+    const response = await fetch(completionUrl(config), {
+      redirect: "error",
       method: "POST",
       headers: {
         authorization: `Bearer ${Redacted.value(config.apiKey)}`,
@@ -249,13 +289,23 @@ export function streamChat(
       if (raw === "[DONE]") return [];
       let data: {
         error?: { message?: string };
-        choices?: Array<{ delta?: { content?: string | null; tool_calls?: Array<{
-          index: number; id?: string; function?: { name?: string; arguments?: string };
-        }> } }>;
+        choices?: Array<{
+          delta?: {
+            content?: string | null;
+            tool_calls?: Array<{
+              index: number;
+              id?: string;
+              function?: { name?: string; arguments?: string };
+            }>;
+          };
+        }>;
         usage?: { total_tokens?: number };
       };
-      try { data = JSON.parse(raw) as typeof data; }
-      catch { throw new OpenRouterError({ reason: "invalid_sse_json" }); }
+      try {
+        data = JSON.parse(raw) as typeof data;
+      } catch {
+        throw new OpenRouterError({ reason: "invalid_sse_json" });
+      }
       if (data.error) throw new OpenRouterError({ reason: data.error.message ?? "provider_error" });
       const delta = data.choices?.[0]?.delta;
       for (const part of delta?.tool_calls ?? []) {
@@ -294,7 +344,9 @@ export function streamChat(
       if (buffer.trim().startsWith("data:")) {
         for (const frame of consumeLines(buffer)) yield frame;
       }
-      for (const [index, call] of [...toolCalls.entries()].sort(([left], [right]) => left - right)) {
+      for (const [index, call] of [...toolCalls.entries()].sort(
+        ([left], [right]) => left - right,
+      )) {
         yield {
           type: "tool_call" as const,
           call: {
@@ -316,10 +368,7 @@ export function streamChat(
 }
 
 /** Cheap curator completion (no tools). */
-export function completeCurator(
-  config: OpenRouterConfig,
-  messages: readonly ChatMessage[],
-) {
+export function completeCurator(config: OpenRouterConfig, messages: readonly ChatMessage[]) {
   return completeChat(config, messages).pipe(
     Effect.map((result) => ({ text: result.text, tokens: result.tokens })),
   );

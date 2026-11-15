@@ -1,5 +1,35 @@
 # Yatma private-alpha delivery plan
 
+## Cloudflare POC follow-on — 2026-11-16
+
+Confirmed scope: retain Cloudflare Worker/UserSpace for chat and sync, add personal
+OpenRouter credentials in Settings, force HTTPS/WSS, and assess Automerge in an
+isolated spike. This supersedes the exploratory BYOK-local-runtime/paid-sync
+discussion as the immediate POC delivery direction; no Turso migration is included.
+
+| Outcome | State | Evidence / remaining acceptance |
+| --- | --- | --- |
+| Account API-key settings | Implemented | Shared contract, status-only UI, encrypted private SQL storage, per-turn/curator resolution; focused persistence and HTTP/UI tests |
+| Browser/native Cloudflare wiring | Implemented; external gate pending | Existing shared event protocol retained; planning calendar forwarding and terminal-stream completion repaired; real Clerk/device/deployed-Worker checks pending |
+| HTTPS/WSS only | Implemented | Backend URLs rejected before credentials; Worker rejects plaintext; Metro uses TLS; local test clients trust project CA explicitly |
+| Isolated Automerge assessment | Verified within spike scope | [Report](../../spikes/automerge-cloudflare/README.md); local workerd HTTPS/WSS convergence and restart passed; Expo iOS bundle passed; on-device engine/storage and production migration remain unverified |
+
+Verification on Node 24.6.0 / pnpm 11.10.0: 390 tests passed in 66 files; all four
+workspace typechecks, package boundaries, Gurki specification lint and whitespace
+checks passed. Spike `pnpm build`, `pnpm test` and `pnpm test:native-bundle` passed.
+The complete Expo iOS export also passed (2,452 modules, Hermes bytecode output);
+this verifies the app bundle, not an installed device or provider connection.
+Metro served `https://localhost:8443/settings` with a certificate validated by curl
+against the generated local CA. React Native Web component checks cover saving,
+clearing/removing a key and stale-account responses. Visual preview acceptance is
+blocked by `ERR_CERT_AUTHORITY_INVALID`; the local CA was not installed into the
+browser/OS trust store and certificate verification was not bypassed.
+
+No deployment was performed. Real Clerk/Cloudflare/model credentials and native
+devices remain required for the integrated browser/mobile scenario. A saved key
+is not provider validation, a bundle is not a native-device test, and local
+workerd evidence is not a Cloudflare deployment.
+
 Conversation review follow-on (2026-11-11): see [conversation prioritisation](conversation-prioritisation.md) for implementation status, Gmail setup, and remaining acceptance.
 
 

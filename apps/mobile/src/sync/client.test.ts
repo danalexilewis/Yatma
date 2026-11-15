@@ -53,6 +53,33 @@ function mockApiResponses(...values: readonly unknown[]) {
 }
 
 describe("sync client stream lifecycle", () => {
+  it.each(["http://api.example/rpc", "ws://api.example/rpc"])(
+    "rejects insecure URLs before reading credentials: %s",
+    (url) => {
+      const getToken = vi.fn(async () => "private-token");
+      expect(() => createSyncClient({ url, getToken, onStatus: () => {} })).toThrow("HTTPS or WSS");
+      expect(getToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not open a stale socket after sign-out while waiting for authentication", async () => {
+    const sockets = vi.fn();
+    vi.stubGlobal("WebSocket", sockets);
+    let token!: (value: string) => void;
+    const client = createSyncClient({
+      url: "https://api.example/rpc",
+      getToken: () =>
+        new Promise((resolve) => {
+          token = resolve;
+        }),
+      onStatus: () => {},
+    });
+    const opening = client.connect();
+    client.disconnect();
+    token("private-token");
+    await expect(opening).rejects.toThrow("cancelled");
+    expect(sockets).not.toHaveBeenCalled();
+  });
   it("preserves HTTP upgrade advice and exposes the required-upgrade status", async () => {
     vi.stubGlobal(
       "fetch",
@@ -70,7 +97,7 @@ describe("sync client stream lifecycle", () => {
     );
     const statuses: string[] = [];
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: (status) => {
         statuses.push(status);
@@ -87,7 +114,7 @@ describe("sync client stream lifecycle", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const statuses: string[] = [];
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: (status) => {
         statuses.push(status);
@@ -142,7 +169,7 @@ describe("sync client stream lifecycle", () => {
       { ok: true },
     );
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
     });
@@ -250,7 +277,7 @@ describe("sync client stream lifecycle", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     FakeWebSocket.failNextHandshake = true;
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
     });
@@ -263,7 +290,7 @@ describe("sync client stream lifecycle", () => {
   it("rejects readiness when the stream exits before its first Chunk", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
     });
@@ -288,7 +315,7 @@ describe("sync client stream lifecycle", () => {
   it("waits for each chunk's durable handler before one chunk acknowledgement", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
       onSyncBatch: async (batch) => {
@@ -375,7 +402,7 @@ describe("sync client stream lifecycle", () => {
       finishHandler = resolve;
     });
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
       onSyncBatch: async () => {
@@ -411,7 +438,7 @@ describe("sync client stream lifecycle", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const onSyncBatch = vi.fn();
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
       onSyncBatch,
@@ -443,7 +470,7 @@ describe("sync client stream lifecycle", () => {
     async (tag) => {
       vi.stubGlobal("WebSocket", FakeWebSocket);
       const client = createSyncClient({
-        url: "ws://localhost",
+        url: "wss://localhost",
         getToken: async () => "token",
         onStatus: () => {},
       });
@@ -488,7 +515,7 @@ describe("sync client stream lifecycle", () => {
       error: null,
     });
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
     });
@@ -501,7 +528,7 @@ describe("sync client stream lifecycle", () => {
   it("gates wrap-up requests and rejects unsupported events in its unary response", async () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     const client = createSyncClient({
-      url: "ws://localhost",
+      url: "wss://localhost",
       getToken: async () => "token",
       onStatus: () => {},
     });
