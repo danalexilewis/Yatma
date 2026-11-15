@@ -3,8 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm --filter @yatma/mobile dev",
-    "dev:web": "BROWSER=none pnpm --filter @yatma/mobile dev --web",
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "node scripts/dev.mjs --web",
     "test": "vp test run",
     "typecheck": "pnpm -r run typecheck",
     "check:boundaries": "node scripts/check-boundaries.mjs",

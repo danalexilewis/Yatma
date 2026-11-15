@@ -39,7 +39,7 @@ function SyncBridge(props: { readonly children: ReactNode }) {
   getTokenRef.current = getToken;
   mergeRemoteEventsRef.current = mergeRemoteEvents;
 
-  const accountId = isSignedIn ? userId ?? null : null;
+  const accountId = isSignedIn ? (userId ?? null) : null;
   useEffect(() => {
     if (!isLoaded || (isSignedIn && !userId)) return;
     if (state.accountId === accountId && state.ready) return;
@@ -64,28 +64,42 @@ function SyncBridge(props: { readonly children: ReactNode }) {
     const url = resolveSyncUrl();
     if (!url) return;
     const sessionGeneration = sessionGenerationRef.current.generation;
-    const isCurrentSession = () =>
-      sessionGenerationRef.current.generation === sessionGeneration;
+    const isCurrentSession = () => sessionGenerationRef.current.generation === sessionGeneration;
 
-    const engine = startSyncEngine({
-      url,
-      getToken: () => (isCurrentSession() ? getTokenRef.current() : Promise.resolve(null)),
-      deviceId: state.deviceId,
-      onStatus: (status) => {
-        if (isCurrentSession()) setSyncStatus(status);
-      },
-      mergeRemoteEvents: (events, cursor) => {
-        if (!isCurrentSession()) throw new Error("sync session changed");
-        return mergeRemoteEventsRef.current(events, cursor);
-      },
-    });
+    let engine: SyncEngine;
+    try {
+      engine = startSyncEngine({
+        url,
+        getToken: () => (isCurrentSession() ? getTokenRef.current() : Promise.resolve(null)),
+        deviceId: state.deviceId,
+        onStatus: (status) => {
+          if (isCurrentSession()) setSyncStatus(status);
+        },
+        mergeRemoteEvents: (events, cursor) => {
+          if (!isCurrentSession()) throw new Error("sync session changed");
+          return mergeRemoteEventsRef.current(events, cursor);
+        },
+      });
+    } catch {
+      setSyncStatus("error");
+      return;
+    }
     engineRef.current = engine;
 
     return () => {
       engine.stop();
       engineRef.current = null;
     };
-  }, [isLoaded, isSignedIn, sessionId, setSyncStatus, state.accountId, state.deviceId, state.ready, userId]);
+  }, [
+    isLoaded,
+    isSignedIn,
+    sessionId,
+    setSyncStatus,
+    state.accountId,
+    state.deviceId,
+    state.ready,
+    userId,
+  ]);
 
   return props.children;
 }

@@ -20,7 +20,14 @@ pnpm dev:web
 ```
 
 Open the printed local URL in one browser tab or the T3 preview. `dev:web` avoids
-opening an additional system-browser tab. Leave Clerk unconfigured for local-only
+opening an additional system-browser tab. Development uses HTTPS and WSS, including
+Metro itself. The launcher creates ignored certificates in `.certs/` using OpenSSL.
+Trust `.certs/dev-ca.pem` on each development browser/device before connecting;
+the launcher does not install it into the OS trust store or disable verification.
+The leaf certificate includes localhost and the machine's current IPv4 addresses.
+After a LAN address change or certificate expiry, remove the leaf certificate/key
+and restart development to issue new ones under the same local CA.
+Leave Clerk unconfigured for local-only
 development; tasks are stored locally without a Worker or cloud database.
 
 ```bash
@@ -34,6 +41,35 @@ pnpm check:specs
   to `apps/mobile/.env` and set `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` and
   `EXPO_PUBLIC_SYNC_URL` to your configured services.
 - Worker: `cd apps/worker && cp .env.example .env && STAGE=dev pnpm deploy`
+
+## Personal Cloudflare POC
+
+Cloudflare remains the POC host: one authenticated `UserSpace` per account owns
+server-side chat and the event journal. Browser and native clients use the same
+Clerk account and `EXPO_PUBLIC_SYNC_URL` (`wss://…/rpc`, or an HTTPS URL). Insecure
+HTTP/WS backend URLs are rejected before credentials are read. The Worker rejects
+plaintext requests; client API and model-provider calls do not follow redirects.
+
+Configure the Worker's Clerk credentials and exact `CORS_ALLOWED_ORIGINS` for your
+HTTPS browser origin. Native clients do not need a browser Origin header. Local
+HTTPS localhost origins are accepted in `STAGE=dev`; plaintext origins never are.
+Use a real Clerk account to test browser/mobile isolation and convergence; the
+existing `test-token` fallback is only for isolated dev-stage protocol checks.
+
+Set `AI_SETTINGS_ENCRYPTION_KEY` to a base64-encoded random 32-byte secret, then
+sign in and open **Settings → AI chat**. Save an OpenRouter API key and its model
+ID (`provider/model`). The key is encrypted with AES-GCM, bound to your account,
+and kept outside task events, sync, exports, and turn inputs. Settings returns
+status only, never the credential. Saving does not validate the key with OpenRouter;
+send a chat request to exercise the provider. New turns and curator calls resolve
+the current saved key. Removing it restores the optional server-key fallback;
+without either key, chat fails with instructions instead of returning a stub.
+Keep the encryption secret stable; rotation/re-encryption is not implemented.
+
+The isolated [Automerge feasibility spike](spikes/automerge-cloudflare/README.md)
+does not change production storage or install dependencies into the main workspace.
+Its local workerd test exercises real HTTPS/WSS and SQLite-backed Durable Objects.
+It is not deployed-cloud or native-device acceptance.
 
 Requires Node `^24` and pnpm `11.10.0`. Effect is pinned at `4.0.1`; alchemy at `2.0.0-beta.80`;
 never-rest at `0.7.0` and neverthrow at `8.2.0`.

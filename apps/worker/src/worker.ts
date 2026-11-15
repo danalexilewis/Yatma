@@ -12,6 +12,8 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { optionalRedacted, verifyClerkRequest, type AuthConfig } from "./auth.ts";
 import { createHealthApi } from "./http/health.ts";
 import { createUserApi, type UserApiContext } from "./http/user.ts";
+import { createModelSettingsApi, type ModelSettingsApiContext } from "./http/modelSettings.ts";
+import { corsHeaders } from "./http/cors.ts";
 import { UserSpace, UserSpaceLive } from "./UserSpace.ts";
 
 /**
@@ -37,6 +39,12 @@ export const ApiLive = Api.make(
     );
     const openRouterModel = yield* Config.String("OPENROUTER_MODEL").pipe(
       Config.withDefault("openai/gpt-4o-mini"),
+    );
+    const encryptionKey = optionalRedacted(
+      yield* Config.option(Config.Redacted("AI_SETTINGS_ENCRYPTION_KEY")),
+    );
+    const corsAllowedOrigins = yield* Config.String("CORS_ALLOWED_ORIGINS").pipe(
+      Config.withDefault(""),
     );
     const usageCap = yield* Config.Number("USAGE_DAILY_TOKEN_CAP").pipe(
       Config.withDefault(500_000),
@@ -65,6 +73,8 @@ export const ApiLive = Api.make(
         CLERK_JWT_AUDIENCE: clerkJwtAudience ?? "yatma",
         OPENROUTER_API_KEY: openRouterApiKey ?? "",
         OPENROUTER_MODEL: openRouterModel,
+        AI_SETTINGS_ENCRYPTION_KEY: encryptionKey ?? "",
+        CORS_ALLOWED_ORIGINS: corsAllowedOrigins,
         USAGE_DAILY_TOKEN_CAP: String(usageCap),
       },
     };
@@ -73,6 +83,9 @@ export const ApiLive = Api.make(
     const userSpaces = yield* UserSpace;
     const { stage } = yield* Alchemy.Stack;
     const healthApi = createHealthApi(stage);
+    const allowedOrigins = yield* Config.String("CORS_ALLOWED_ORIGINS").pipe(
+      Config.withDefault(""),
+    );
 
     const clerkSecretRaw = yield* Config.option(Config.Redacted("CLERK_SECRET_KEY"));
     const authConfig: AuthConfig = {
@@ -88,123 +101,165 @@ export const ApiLive = Api.make(
         const request = yield* HttpServerRequest;
         const raw = request.source as Request;
         const url = new URL(raw.url);
+        if (url.protocol !== "https:")
+          return HttpServerResponse.text("HTTPS required", { status: 400 });
+        const headers = corsHeaders(raw, stage, allowedOrigins);
+        if (!headers) return HttpServerResponse.text("Origin not allowed", { status: 403 });
+        if (raw.method === "OPTIONS") return HttpServerResponse.empty({ status: 204, headers });
+        const response = yield* Effect.gen(function* () {
+          if (url.pathname.startsWith("/api/settings/")) {
+            const verified = yield* verifyClerkRequest(authConfig, raw).pipe(Effect.option);
+            const principal = Option.isSome(verified) ? verified.value : null;
+            const context: ModelSettingsApiContext = {
+              getModelSettings: async (id) => {
+                if (id !== principal?.userId) throw new Error("principal mismatch");
+                const client = await Effect.runPromise(userSpaces.getByName(id));
+                return Effect.runPromise(client["model.settings.get"]());
+              },
+              saveModelSettings: async (id, input) => {
+                if (id !== principal?.userId) throw new Error("principal mismatch");
+                const client = await Effect.runPromise(userSpaces.getByName(id));
+                return Effect.runPromise(client["model.settings.save"](input));
+              },
+              removeModelSettings: async (id) => {
+                if (id !== principal?.userId) throw new Error("principal mismatch");
+                const client = await Effect.runPromise(userSpaces.getByName(id));
+                return Effect.runPromise(client["model.settings.remove"]());
+              },
+            };
+            const result = yield* Effect.promise(() =>
+              createModelSettingsApi(principal).handle(raw, context),
+            );
+            const resultResponse = result.matched
+              ? result.response
+              : new Response("Not found", { status: 404 });
+            resultResponse.headers.set("Cache-Control", "no-store");
+            return HttpServerResponse.fromWeb(resultResponse);
+          }
 
-        if (url.pathname === "/health" || url.pathname === "/") {
-          if (raw.headers.get("upgrade")?.toLowerCase() === "websocket") {
-            // fall through to auth + DO
-          } else {
-            const response = yield* Effect.promise(() => healthApi(raw, undefined));
+          if (url.pathname === "/health" || url.pathname === "/") {
+            if (raw.headers.get("upgrade")?.toLowerCase() === "websocket") {
+              // fall through to auth + DO
+            } else {
+              const response = yield* Effect.promise(() => healthApi(raw, undefined));
+              return HttpServerResponse.fromWeb(response);
+            }
+          }
+
+          if (url.pathname.startsWith("/api/review/") || url.pathname.startsWith("/api/gmail/")) {
+            const verified = yield* verifyClerkRequest(authConfig, raw).pipe(Effect.option);
+            if (Option.isNone(verified))
+              return HttpServerResponse.text("Unauthorized", { status: 401 });
+            const { userId } = verified.value;
+            const client = yield* userSpaces.getByName(userId);
+            function owned(id: string) {
+              if (id !== userId) throw new Error("principal mismatch");
+            }
+            const context: GmailApiContext & ReviewApiContext = {
+              readReviewSchedule: async (id) => {
+                owned(id);
+                return Effect.runPromise(client["review.schedule.get"]());
+              },
+              saveReviewSchedule: async (id, input) => {
+                owned(id);
+                return Effect.runPromise(client["review.schedule.set"](input));
+              },
+              gmailStatus: async (id) => {
+                owned(id);
+                return Effect.runPromise(client["gmail.status"]());
+              },
+              beginGmail: async (id) => {
+                owned(id);
+                return Effect.runPromise(client["gmail.begin"]());
+              },
+              completeGmail: async (id, input) => {
+                owned(id);
+                return Effect.runPromise(client["gmail.complete"](input));
+              },
+              importGmail: async (id, input) => {
+                owned(id);
+                return Effect.runPromise(client["gmail.import"](input));
+              },
+              disconnectGmail: async (id) => {
+                owned(id);
+                return Effect.runPromise(client["gmail.disconnect"]());
+              },
+            };
+            const api = url.pathname.startsWith("/api/review/")
+              ? createReviewApi({ userId })
+              : createGmailApi({ userId });
+            const result = yield* Effect.promise(() => api.handle(raw, context));
+            return result.matched
+              ? HttpServerResponse.fromWeb(result.response)
+              : HttpServerResponse.text("Not found", { status: 404 });
+          }
+
+          const isUserApiRoute =
+            url.pathname.startsWith("/api/sync/") || url.pathname.startsWith("/api/turns");
+          if (isUserApiRoute) {
+            const verified = yield* verifyClerkRequest(authConfig, raw).pipe(
+              Effect.mapError(() => undefined),
+              Effect.option,
+            );
+            const fallbackContext: UserApiContext = {
+              pushEvents: async () => {
+                throw new Error("unavailable");
+              },
+              startTurn: async () => {
+                throw new Error("unavailable");
+              },
+              getTurn: async () => {
+                throw new Error("unavailable");
+              },
+              stopTurn: async () => {
+                throw new Error("unavailable");
+              },
+            };
+            if (Option.isNone(verified)) {
+              const response = yield* Effect.promise(() =>
+                createUserApi(null)(raw, fallbackContext),
+              );
+              return HttpServerResponse.fromWeb(response);
+            }
+            const { userId } = verified.value;
+            const client = yield* userSpaces.getByName(userId);
+            const context: UserApiContext = {
+              pushEvents: (targetUserId, input) =>
+                targetUserId === userId
+                  ? Effect.runPromise(client["sync.push"](input))
+                  : Promise.reject(new Error("principal mismatch")),
+              startTurn: (targetUserId, input) =>
+                targetUserId === userId
+                  ? Effect.runPromise(client["turn.start"](input))
+                  : Promise.reject(new Error("principal mismatch")),
+              getTurn: (targetUserId, turnId, eventSchemaVersion) =>
+                targetUserId === userId
+                  ? Effect.runPromise(client["turn.get"]({ turnId, eventSchemaVersion }))
+                  : Promise.reject(new Error("principal mismatch")),
+              stopTurn: (targetUserId, input) =>
+                targetUserId === userId
+                  ? Effect.runPromise(client["turn.stop"](input))
+                  : Promise.reject(new Error("principal mismatch")),
+            };
+            const response = yield* Effect.promise(() => createUserApi({ userId })(raw, context));
             return HttpServerResponse.fromWeb(response);
           }
-        }
 
-        if (url.pathname.startsWith("/api/review/") || url.pathname.startsWith("/api/gmail/")) {
-          const verified = yield* verifyClerkRequest(authConfig, raw).pipe(Effect.option);
-          if (Option.isNone(verified))
-            return HttpServerResponse.text("Unauthorized", { status: 401 });
-          const { userId } = verified.value;
-          const client = yield* userSpaces.getByName(userId);
-          function owned(id: string) {
-            if (id !== userId) throw new Error("principal mismatch");
-          }
-          const context: GmailApiContext & ReviewApiContext = {
-            readReviewSchedule: async (id) => {
-              owned(id);
-              return Effect.runPromise(client["review.schedule.get"]());
-            },
-            saveReviewSchedule: async (id, input) => {
-              owned(id);
-              return Effect.runPromise(client["review.schedule.set"](input));
-            },
-            gmailStatus: async (id) => {
-              owned(id);
-              return Effect.runPromise(client["gmail.status"]());
-            },
-            beginGmail: async (id) => {
-              owned(id);
-              return Effect.runPromise(client["gmail.begin"]());
-            },
-            completeGmail: async (id, input) => {
-              owned(id);
-              return Effect.runPromise(client["gmail.complete"](input));
-            },
-            importGmail: async (id, input) => {
-              owned(id);
-              return Effect.runPromise(client["gmail.import"](input));
-            },
-            disconnectGmail: async (id) => {
-              owned(id);
-              return Effect.runPromise(client["gmail.disconnect"]());
-            },
-          };
-          const api = url.pathname.startsWith("/api/review/")
-            ? createReviewApi({ userId })
-            : createGmailApi({ userId });
-          const result = yield* Effect.promise(() => api.handle(raw, context));
-          return result.matched
-            ? HttpServerResponse.fromWeb(result.response)
-            : HttpServerResponse.text("Not found", { status: 404 });
-        }
-
-        const isUserApiRoute =
-          url.pathname.startsWith("/api/sync/") || url.pathname.startsWith("/api/turns");
-        if (isUserApiRoute) {
           const verified = yield* verifyClerkRequest(authConfig, raw).pipe(
             Effect.mapError(() => undefined),
             Effect.option,
           );
-          const fallbackContext: UserApiContext = {
-            pushEvents: async () => {
-              throw new Error("unavailable");
-            },
-            startTurn: async () => {
-              throw new Error("unavailable");
-            },
-            getTurn: async () => {
-              throw new Error("unavailable");
-            },
-            stopTurn: async () => {
-              throw new Error("unavailable");
-            },
-          };
           if (Option.isNone(verified)) {
-            const response = yield* Effect.promise(() => createUserApi(null)(raw, fallbackContext));
-            return HttpServerResponse.fromWeb(response);
+            return HttpServerResponse.text("Unauthorized", { status: 401 });
           }
+
           const { userId } = verified.value;
-          const client = yield* userSpaces.getByName(userId);
-          const context: UserApiContext = {
-            pushEvents: (targetUserId, input) =>
-              targetUserId === userId
-                ? Effect.runPromise(client["sync.push"](input))
-                : Promise.reject(new Error("principal mismatch")),
-            startTurn: (targetUserId, input) =>
-              targetUserId === userId
-                ? Effect.runPromise(client["turn.start"](input))
-                : Promise.reject(new Error("principal mismatch")),
-            getTurn: (targetUserId, turnId, eventSchemaVersion) =>
-              targetUserId === userId
-                ? Effect.runPromise(client["turn.get"]({ turnId, eventSchemaVersion }))
-                : Promise.reject(new Error("principal mismatch")),
-            stopTurn: (targetUserId, input) =>
-              targetUserId === userId
-                ? Effect.runPromise(client["turn.stop"](input))
-                : Promise.reject(new Error("principal mismatch")),
-          };
-          const response = yield* Effect.promise(() => createUserApi({ userId })(raw, context));
-          return HttpServerResponse.fromWeb(response);
-        }
-
-        const verified = yield* verifyClerkRequest(authConfig, raw).pipe(
-          Effect.mapError(() => undefined),
-          Effect.option,
-        );
-        if (Option.isNone(verified)) {
-          return HttpServerResponse.text("Unauthorized", { status: 401 });
-        }
-
-        const { userId } = verified.value;
-        return yield* userSpaces.fetch(userId, request);
+          return yield* userSpaces.fetch(userId, request);
+        });
+        return HttpServerResponse.setHeaders(response, {
+          ...headers,
+          "Strict-Transport-Security": "max-age=31536000",
+        });
       }),
     };
   }).pipe(Effect.provide(UserSpaceLive)),

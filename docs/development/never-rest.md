@@ -34,6 +34,7 @@ Runtime-specific code stays out of the shared package.
 | Contract                  | Runtime status                                                                                           |
 | ------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `@yatma/contracts/health` | Worker serves `GET /health` and `GET /`; WebSocket upgrades bypass this JSON mount                      |
+| `@yatma/contracts/modelSettings` | Authenticated GET/PUT/DELETE `/api/settings/model`; status-only responses, encrypted private credentials |
 | `@yatma/contracts/sync`   | `pushEvents` is mounted at `POST /api/sync/events`; Worker verifies Clerk before calling the UserSpace RPC |
 | `@yatma/contracts/turn`   | `startTurn`, `getTurn`, and `stopTurn` are mounted under `/api/turns`; observation remains on WebSocket  |
 

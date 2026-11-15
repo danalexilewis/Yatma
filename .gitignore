@@ -3,6 +3,7 @@ node_modules
 dist
 .expo
 .env
+.certs/
 .alchemy
 *.local
 ios/Pods

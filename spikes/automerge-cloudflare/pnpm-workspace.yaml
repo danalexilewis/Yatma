@@ -1,0 +1,5 @@
+packages: []
+allowBuilds:
+  cbor-extract: false
+  esbuild: true
+  workerd: true

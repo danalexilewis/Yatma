@@ -1,0 +1,24 @@
+{
+  "name": "yatma-automerge-cloudflare-spike",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node dev.mjs",
+    "test": "node test.mjs",
+    "test:native-bundle": "node native-probe.mjs"
+  },
+  "dependencies": {
+    "@automerge/automerge": "3.5.0",
+    "@automerge/automerge-repo": "2.5.4",
+    "@automerge/automerge-repo-network-websocket": "2.5.4",
+    "@automerge/automerge-repo-storage-indexeddb": "2.5.4",
+    "eventemitter3": "5.0.1"
+  },
+  "devDependencies": {
+    "@babel/runtime": "7.28.4",
+    "esbuild": "0.25.12",
+    "wrangler": "4.162.0",
+    "ws": "8.18.3"
+  }
+}

@@ -15,10 +15,10 @@ function request(overrides: Record<string, unknown> = {}) {
   return {
     url: "/_yatma/dev/reset-storage",
     method: "POST",
-    socket: { remoteAddress: "127.0.0.1" },
+    socket: { remoteAddress: "127.0.0.1", encrypted: true },
     headers: {
       host: "localhost:8081",
-      origin: "http://localhost:8081",
+      origin: "https://localhost:8081",
       "x-yatma-development-reset": "1",
     },
     ...overrides,
@@ -50,6 +50,7 @@ describe("development storage reset", () => {
   });
 
   it.each([
+    { socket: { remoteAddress: "127.0.0.1", encrypted: false } },
     { socket: { remoteAddress: "192.168.1.20" } },
     { headers: { host: "yatma.example", "x-yatma-development-reset": "1" } },
     {

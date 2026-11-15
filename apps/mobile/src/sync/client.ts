@@ -40,6 +40,8 @@ import type {
 import { createClient } from "@eddy-works/never-rest/client";
 import { syncContract } from "@yatma/contracts/sync";
 import { turnContract } from "@yatma/contracts/turn";
+import { modelSettingsContract } from "@yatma/contracts/modelSettings";
+import type { SaveModelSettings } from "@yatma/core";
 import {
   SYNC_EVENT_SCHEMA_VERSION,
   SyncBatch as SyncBatchSchema,
@@ -117,15 +119,31 @@ type ExitEncoded =
  * Methods: ping, sync.push, sync.subscribe, account.delete, chat.send/stop/wrapUp, transcribe, usage.get.
  */
 export function createSyncClient(options: SyncClientOptions) {
-  const apiUrl = new URL(options.url);
-  apiUrl.protocol = apiUrl.protocol === "wss:" ? "https:" : "http:";
+  const socketUrl = new URL(options.url);
+  if (socketUrl.protocol !== "wss:" && socketUrl.protocol !== "https:") {
+    throw new Error(
+      "The sync server must use HTTPS or WSS. Insecure HTTP and WS connections are disabled.",
+    );
+  }
+  if (socketUrl.username || socketUrl.password)
+    throw new Error("Do not include credentials in the sync server URL.");
+  socketUrl.protocol = "wss:";
+  const apiUrl = new URL(socketUrl);
+  apiUrl.protocol = "https:";
   apiUrl.pathname = "/";
   apiUrl.search = "";
   apiUrl.hash = "";
   const api = createClient(
-    { ...syncContract, ...turnContract, ...gmailContract, ...reviewContract },
+    {
+      ...syncContract,
+      ...turnContract,
+      ...gmailContract,
+      ...reviewContract,
+      ...modelSettingsContract,
+    },
     {
       baseUrl: apiUrl.toString(),
+      fetch: (input, init) => fetch(input, { ...init, redirect: "error" }),
       headers: async (): Promise<HeadersInit> => {
         const token = await options.getToken();
         return token ? { Authorization: `Bearer ${token}` } : {};
@@ -149,6 +167,7 @@ export function createSyncClient(options: SyncClientOptions) {
   let requestId = 0;
   const pending = new Map<string | number, Pending>();
   let openPromise: Promise<void> | null = null;
+  let connectionGeneration = 0;
 
   function nextId(): string {
     requestId += 1;
@@ -331,13 +350,15 @@ export function createSyncClient(options: SyncClientOptions) {
     if (openPromise) return openPromise;
     options.onStatus("connecting");
 
+    const generation = connectionGeneration;
     const attempt = (async () => {
       const token = await options.getToken();
+      if (generation !== connectionGeneration) throw new Error("sync connection cancelled");
       if (!token) {
         options.onStatus("idle");
         throw new Error("missing clerk token");
       }
-      const url = new URL(options.url);
+      const url = new URL(socketUrl);
       url.searchParams.set("token", token);
 
       await new Promise<void>((resolve, reject) => {
@@ -353,6 +374,7 @@ export function createSyncClient(options: SyncClientOptions) {
         };
         connectedSocket.onclose = () => {
           if (socket !== connectedSocket) return;
+          reject(new Error("socket closed before connecting"));
           options.onStatus("idle");
           openPromise = null;
           for (const [, entry] of pending) {
@@ -381,6 +403,7 @@ export function createSyncClient(options: SyncClientOptions) {
   }
 
   function disconnect(): void {
+    connectionGeneration++;
     openPromise = null;
     socket?.close();
     socket = null;
@@ -509,6 +532,10 @@ export function createSyncClient(options: SyncClientOptions) {
   }
 
   return {
+    getModelSettings: () => unwrapApiResult(api.getModelSettings({})),
+    saveModelSettings: (body: SaveModelSettings) =>
+      unwrapApiResult(api.saveModelSettings({ body })),
+    removeModelSettings: () => unwrapApiResult(api.removeModelSettings({})),
     readReviewSchedule: () => unwrapApiResult(api.readReviewSchedule({})),
     saveReviewSchedule: (body: ReviewSchedule) => unwrapApiResult(api.saveReviewSchedule({ body })),
     gmailStatus: () => unwrapApiResult(api.gmailStatus({})),

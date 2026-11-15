@@ -71,6 +71,22 @@ export const SpaceError = Schema.Union([
 ]);
 export type SpaceError = typeof SpaceError.Type;
 
+/** Provider settings expose configuration status, never the stored credential. */
+export const ModelSettings = Schema.Struct({
+  provider: Schema.Literal("openrouter"),
+  model: Schema.String,
+  source: Schema.Literals(["personal", "server", "missing"]),
+  canSaveKey: Schema.Boolean,
+});
+export type ModelSettings = typeof ModelSettings.Type;
+
+/** A replacement key is sent only to the authenticated settings endpoint. */
+export const SaveModelSettings = Schema.Struct({
+  apiKey: Schema.String.check(Schema.isPattern(/^\S{16,512}$/)),
+  model: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._:/-]{1,180}$/)),
+});
+export type SaveModelSettings = typeof SaveModelSettings.Type;
+
 export const SyncBatch = Schema.Struct({
   events: Schema.Array(Event),
   after: Seq,
@@ -320,6 +336,20 @@ export const UsageGetRpc = Rpc.make("usage.get", {
   error: SpaceError,
 });
 
+export const ModelSettingsGetRpc = Rpc.make("model.settings.get", {
+  success: ModelSettings,
+  error: SpaceError,
+});
+export const ModelSettingsSaveRpc = Rpc.make("model.settings.save", {
+  payload: SaveModelSettings,
+  success: ModelSettings,
+  error: SpaceError,
+});
+export const ModelSettingsRemoveRpc = Rpc.make("model.settings.remove", {
+  success: ModelSettings,
+  error: SpaceError,
+});
+
 export const AccountDeleteRpc = Rpc.make("account.delete", {
   success: Schema.Struct({ ok: Schema.Literal(true) }),
   error: SpaceError,
@@ -355,6 +385,9 @@ export const GmailDisconnectRpc = Rpc.make("gmail.disconnect", {
   error: SpaceError,
 });
 export type SpaceRpcs =
+  | typeof ModelSettingsGetRpc
+  | typeof ModelSettingsSaveRpc
+  | typeof ModelSettingsRemoveRpc
   | typeof PingRpc
   | typeof SyncPushRpc
   | typeof SyncSubscribeRpc
@@ -376,6 +409,9 @@ export type SpaceRpcs =
   | typeof GmailImportRpc
   | typeof GmailDisconnectRpc;
 export const SpaceRpcGroup: RpcGroup.RpcGroup<SpaceRpcs> = RpcGroup.make(
+  ModelSettingsGetRpc,
+  ModelSettingsSaveRpc,
+  ModelSettingsRemoveRpc,
   ReviewScheduleGetRpc,
   ReviewScheduleSetRpc,
   GmailStatusRpc,

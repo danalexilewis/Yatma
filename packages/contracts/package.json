@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./modelSettings": "./src/modelSettings.ts",
     "./health": "./src/health.ts",
     "./sync": "./src/sync.ts",
     "./turn": "./src/turn.ts",

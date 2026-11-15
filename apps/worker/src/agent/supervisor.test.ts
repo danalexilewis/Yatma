@@ -1,8 +1,9 @@
 // Copyright (c) T3 Tools / MIT — adapted for Yatma
 import { describe, expect, it } from "@effect/vitest";
-import { ChatId, type TurnStartInput } from "@yatma/core";
+import { ChatId, InternalError, type TurnStartInput } from "@yatma/core";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
@@ -35,6 +36,68 @@ function startInput(requestId: string, text: string): TurnStartInput {
 }
 
 describe("worker turn supervisor", () => {
+  it.effect("closes live observation only after the terminal result is readable", () =>
+    withStore(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const hub = yield* Mutations.makeCommitHub;
+          const release = yield* Deferred.make<void>();
+          const supervisor = yield* Supervisor.makeSupervisor({
+            sqlLayer,
+            mutations: Mutations.makeMutationService(hub),
+            model: "scripted",
+            openRouterKey: "scripted",
+            gateway: {
+              stream: () =>
+                Stream.concat(
+                  Stream.fromEffect(Deferred.await(release)).pipe(Stream.drain),
+                  Stream.make({ type: "text", text: "Finished" }, { type: "usage", tokens: 1 }),
+                ),
+            },
+          });
+          const receipt = yield* supervisor.start(startInput("live-finish", "Hello"));
+          const observing = yield* Stream.runCollect(supervisor.observe(receipt.turnId, 0)).pipe(
+            Effect.forkChild,
+          );
+          yield* Deferred.succeed(release, undefined);
+          const frames = yield* Fiber.join(observing);
+          expect(frames.at(-1)?.item.kind).toBe("done");
+          const final = yield* supervisor.get(receipt.turnId);
+          expect(final?.receipt.status).toBe("completed");
+          expect(final?.resultText).toBe("Finished");
+        }),
+      ),
+    ),
+  );
+
+  it.effect("persists a safe credential error and completes observation without a stub reply", () =>
+    withStore(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const hub = yield* Mutations.makeCommitHub;
+          const supervisor = yield* Supervisor.makeSupervisor({
+            sqlLayer,
+            mutations: Mutations.makeMutationService(hub),
+            model: "unused",
+            openRouterKey: null,
+            resolveModel: () =>
+              Effect.fail(
+                new InternalError({
+                  message: "Add an OpenRouter API key in Settings to use AI chat.",
+                }),
+              ),
+          });
+          const receipt = yield* supervisor.start(startInput("missing-key", "Hello"));
+          const frames = yield* Stream.runCollect(supervisor.observe(receipt.turnId, 0));
+          expect(frames.at(-1)?.item.kind).toBe("done");
+          const result = yield* supervisor.get(receipt.turnId);
+          expect(result?.receipt.status).toBe("failed");
+          expect(result?.error).toContain("Settings");
+          expect(result?.resultText).toBeNull();
+        }),
+      ),
+    ),
+  );
   it.effect(
     "retains the device planning day through admission and fences conflicting calendar retries",
     () =>

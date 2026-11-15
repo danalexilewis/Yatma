@@ -51,6 +51,7 @@ async function clearWhenTerminal(
   const result = await client.turnGet({ turnId });
   if (!isTerminalStatus(result.receipt.status)) return false;
   await clearActiveTurn(chatId, turnId);
+  if (result.error) throw new Error(result.error);
   return true;
 }
 

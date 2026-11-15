@@ -260,6 +260,15 @@ batch/change summaries are separate projections of committed state.
 
 ## 7. Model gateway and usage ledger — R2
 
+POC addition (2026-11-16): `ModelSettings` / `SaveModelSettings` are shared Effect
+schemas used by `@yatma/contracts/modelSettings` and the internal DO RPC bridge.
+GET/PUT/DELETE `/api/settings/model` targets only the Worker-verified principal.
+The private `model_settings` table contains the model ID and account-bound AES-GCM
+ciphertext, never event records. The server encryption secret is deployment-owned;
+no key is returned to clients. `resolveModel()` supplies the current credential to
+each supervised turn and curator execution. Raw credentials are not turn inputs.
+API-key and OAuth authentication for other model providers remain outside this POC.
+
 Implemented in part: Worker has a model gateway, usage ledger, and supervisor
 modules (`agent/modelGateway.ts`, `agent/usage.ts`, `agent/supervisor.ts`).
 `agent/turn.ts` remains in the runtime and some accounting/admission behavior
