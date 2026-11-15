@@ -7,6 +7,9 @@ import type { ModelSettings } from "@yatma/core";
 import { ModelSettingsPanel } from "./ModelSettingsPanel";
 
 vi.mock("react-native", () => vi.importActual<typeof import("react-native")>("react-native-web"));
+vi.mock("expo-router", () => ({
+  Link: ({ children }: { children: React.ReactNode }) => createElement("a", {}, children),
+}));
 vi.mock("../../state/atoms", () => ({ useAppStore: () => ({ state: { accountId } }) }));
 vi.mock("../../state/syncStatusAtom", () => ({ useSyncStatus: () => "connected" }));
 vi.mock("../../sync/engine", () => ({
@@ -105,4 +108,47 @@ describe("AI settings", () => {
     ).toBe("other/model");
     expect(container.textContent).not.toContain("Using your OpenRouter key");
   });
+});
+
+async function enter(label: string, value: string) {
+  const input = container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function button(label: string) {
+  return Array.from(container.querySelectorAll<HTMLElement>('[role="button"]')).find(
+    (element) => element.textContent === label,
+  )!;
+}
+
+it("changes the model with a saved key without sending a replacement credential", async () => {
+  saveModelSettings.mockResolvedValue({ ...configured, model: "example/new-model" });
+  await render();
+  await enter("OpenRouter model", "example/new-model");
+  await act(async () => button("Save model").click());
+  expect(saveModelSettings).toHaveBeenCalledWith({ model: "example/new-model" });
+  expect(container.textContent).toContain("Model saved");
+  expect(
+    container.querySelector<HTMLInputElement>('input[aria-label="OpenRouter API key"]')!.value,
+  ).toBe("");
+});
+
+it("keeps a draft after a failed save and validates with the shared schema", async () => {
+  saveModelSettings.mockRejectedValue(new Error("private-provider-detail"));
+  await render();
+  await enter("OpenRouter API key", "too short");
+  expect(button("Save API key").getAttribute("aria-disabled")).toBe("true");
+  await enter("OpenRouter API key", "sk-or-v1-ui-test-secret");
+  await enter("OpenRouter model", "invalid model/name with spaces");
+  expect(button("Save API key").getAttribute("aria-disabled")).toBe("true");
+  await enter("OpenRouter model", configured.model);
+  await act(async () => button("Save API key").click());
+  expect(container.textContent).toContain("Could not save AI settings");
+  expect(container.textContent).not.toContain("private-provider-detail");
+  expect(
+    container.querySelector<HTMLInputElement>('input[aria-label="OpenRouter API key"]')!.value,
+  ).toBe("sk-or-v1-ui-test-secret");
 });

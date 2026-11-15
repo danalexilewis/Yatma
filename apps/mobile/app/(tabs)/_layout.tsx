@@ -104,11 +104,20 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="skills"
+        options={{
+          href: null,
+          title: "Skills",
+          tabBarIcon: ({ color, size }) => (
+            <TabIcon name="sparkles-outline" size={size} color={String(color)} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           href: null,
           title: "Settings",
-          headerShown: true,
           tabBarIcon: ({ color, size }) => (
             <TabIcon name="settings-outline" size={size} color={String(color)} />
           ),

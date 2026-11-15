@@ -13,6 +13,30 @@ const status = {
 } as const;
 
 describe("model settings HTTP boundary", () => {
+  it("accepts a model-only update through the shared contract", async () => {
+    const inputs: unknown[] = [];
+    const context: ModelSettingsApiContext = {
+      getModelSettings: async () => status,
+      saveModelSettings: async (_id, input) => {
+        inputs.push(input);
+        return { ...status, model: input.model };
+      },
+      removeModelSettings: async () => status,
+    };
+    const api = createModelSettingsApi({ userId: "verified" });
+    const client = createClient(modelSettingsContract, {
+      baseUrl: "https://api.test",
+      fetch: async (input, init) => {
+        const result = await api.handle(new Request(input, init), context);
+        if (!result.matched) throw new Error("unmatched");
+        return result.response;
+      },
+    });
+    const result = await client.saveModelSettings({ body: { model: "example/new-model" } });
+    expect(result.isOk()).toBe(true);
+    expect(inputs).toEqual([{ model: "example/new-model" }]);
+  });
+
   it("routes every typed operation to the verified account and never returns its key", async () => {
     const calls: string[] = [];
     const context: ModelSettingsApiContext = {

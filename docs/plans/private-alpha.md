@@ -1,5 +1,26 @@
 # Yatma private-alpha delivery plan
 
+## Settings consolidation — 2026-11-16
+
+Target: Settings is the home for all current user-facing app configuration;
+reusable skills may later standardise AI outputs.
+
+| Outcome | State | Evidence / remaining acceptance |
+| --- | --- | --- |
+| Settings navigation and configuration | Implemented; component-verified | AI & skills, Planning & focus, Connections, App & account; existing preference writers and shared clients retained. Review and routine-default controls moved here with shortcuts from their previous screens. Triage reloads its limit on focus. |
+| Personal key and model | Verified in component/HTTP/SQLite tests | Key entry, replacement/removal, show/hide, validation and retry; model-only updates preserve the existing ciphertext. Keys remain outside task sync/exports. Real provider access remains unverified. |
+| App preferences and account data | Implemented; component-verified in part | Dictation and triage limits use existing account-local metadata; invalid limits and failed saves are covered. Usage responses from old accounts are ignored. Browser JSONL download and cross-platform account-deletion confirmation are implemented; real download/deletion and device permissions remain unverified. |
+| Skills | Target only | Settings contains a clearly marked Planned area; no skill storage, enabling, or execution is implemented. |
+
+Verification on Node 24.6.0 / pnpm 11.10.0: `pnpm test` passed 400 tests in
+68 files; `pnpm -r typecheck`, `pnpm check:boundaries` and `git diff --check`
+passed. Expo iOS export passed (2,456 modules, Hermes output), verifying the
+bundle rather than an installed device. HTTPS `/settings` responds with a
+certificate validated against the project CA using curl. Visual browser
+acceptance remains blocked by `ERR_CERT_AUTHORITY_INVALID` in the collaborative
+preview; no trust-store changes or certificate-verification bypass were made.
+No deployment or live-provider/native-device acceptance was performed.
+
 ## Cloudflare POC follow-on — 2026-11-16
 
 Confirmed scope: retain Cloudflare Worker/UserSpace for chat and sync, add personal

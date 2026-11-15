@@ -20,12 +20,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import type * as SqlClient from "effect/sql/SqlClient";
 
 import * as Turn from "./agent/turn.ts";
 import * as Supervisor from "./agent/supervisor.ts";
 import * as Usage from "./agent/usage.ts";
 import * as AccountDeletion from "./application/accountDeletion.ts";
 import * as Mutations from "./application/mutations.ts";
+import * as Skills from "./application/skills.ts";
 import * as ModelSettings from "./application/modelSettings.ts";
 import { deleteClerkUser } from "./auth.ts";
 import * as Curator from "./curator.ts";
@@ -68,6 +70,7 @@ export const UserSpaceLive = UserSpace.make(
 
       yield* EventStore.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* Usage.migrate.pipe(Effect.provide(sql), Effect.orDie);
+      yield* Skills.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* ModelSettings.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* Gmail.migrate.pipe(Effect.provide(sql), Effect.orDie);
       yield* ReviewSchedule.migrate.pipe(Effect.provide(sql), Effect.orDie);
@@ -104,6 +107,9 @@ export const UserSpaceLive = UserSpace.make(
       const resolveModel = () =>
         ensureAccountActive().pipe(
           Effect.andThen(modelSettings.resolve),
+          Effect.flatMap((config) =>
+            Skills.list.pipe(Effect.map(({ skills }) => ({ ...config, skills }))),
+          ),
           Effect.flatMap((config) =>
             config.openRouterKey
               ? Effect.succeed(config)
@@ -226,7 +232,22 @@ export const UserSpaceLive = UserSpace.make(
         );
       }
 
+      function skillOperation<A, E>(operation: Effect.Effect<A, E, SqlClient.SqlClient>) {
+        return commitHub
+          .exclusive(ensureAccountActive().pipe(Effect.andThen(operation)))
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof InvalidRequest
+                ? error
+                : new InternalError({ message: "skills_unavailable" }),
+            ),
+          );
+      }
+
       return SpaceRpcGroup.toLayer({
+        "skills.list": () => skillOperation(Skills.list),
+        "skills.save": (input) => skillOperation(Skills.save(input, new Date().toISOString())),
+        "skills.delete": ({ id }) => skillOperation(Skills.remove(id)),
         "model.settings.get": () =>
           ensureAccountActive().pipe(
             Effect.andThen(modelSettings.get),
@@ -494,6 +515,9 @@ export const UserSpaceLive = UserSpace.make(
                 );
             }
             yield* supervisor.stopAll.pipe(
+              Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
+            );
+            yield* Skills.clear.pipe(
               Effect.mapError(() => new InternalError({ message: "account_delete_incomplete" })),
             );
             yield* modelSettings.remove.pipe(

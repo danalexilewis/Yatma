@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import { useRouter } from "expo-router";
 import { formatRef, isCalendarDate, needsReview, type ReviewItem } from "@yatma/core";
 import { useRef, useState } from "react";
 import {
@@ -14,7 +15,6 @@ import {
 
 import { IconButton } from "../../ui";
 import type { ReviewDecisionResult } from "../../application/review";
-import { ReviewSettings } from "./ReviewSettings";
 import { decideReview } from "../../application/review";
 import { localPlanningDay } from "../../application/dailyStack";
 import { useAppStore } from "../../state/atoms";
@@ -29,12 +29,12 @@ export function ReviewPanel(props: {
   readonly busy: boolean;
 }) {
   const store = useAppStore();
+  const router = useRouter();
   const theme = useTheme();
   const [lastDecision, setLastDecision] = useState<ReviewDecisionResult | null>(null);
   const [undoError, setUndoError] = useState<string | null>(null);
   const [undoing, setUndoing] = useState(false);
   const [open, setOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("pending");
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const date = localPlanningDay(new Date(), timezone);
@@ -87,9 +87,12 @@ export function ReviewPanel(props: {
             </Text>
             <IconButton
               name="options-outline"
-              accessibilityLabel={settingsOpen ? "Close review settings" : "Review settings"}
+              accessibilityLabel="Review settings"
               color={theme.colors.muted}
-              onPress={() => setSettingsOpen(!settingsOpen)}
+              onPress={() => {
+                setOpen(false);
+                router.push("/settings?section=connections");
+              }}
             />
             <IconButton
               name="close-outline"
@@ -171,7 +174,6 @@ export function ReviewPanel(props: {
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={{ gap: 12, paddingBottom: 32 }}
           >
-            {settingsOpen ? <ReviewSettings /> : null}
             {selected.length === 0 ? (
               <Text style={{ color: theme.colors.muted, paddingVertical: 20 }}>
                 No items here. You can still discuss your existing backlog with Yatma.
@@ -231,7 +233,8 @@ function ReviewItemCard(props: {
     );
   async function decide(disposition: ReviewItem["disposition"]) {
     if (saving) return;
-    const revisitOn = disposition === "later" || disposition === "waiting" ? revisit.trim() || null : null;
+    const revisitOn =
+      disposition === "later" || disposition === "waiting" ? revisit.trim() || null : null;
     if (revisitOn && !isCalendarDate(revisitOn)) {
       setError("Enter a valid revisit date as YYYY-MM-DD.");
       return;

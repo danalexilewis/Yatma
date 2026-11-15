@@ -44,6 +44,7 @@ const destinations = [
     icon: "repeat-outline",
   },
   { title: "Projects", subtitle: "All your projects", href: "/projects", icon: "folder-outline" },
+  { title: "Skills", subtitle: "Reusable AI instructions", href: "/skills", icon: "sparkles-outline" },
   {
     title: "Settings",
     subtitle: "Workspace preferences",

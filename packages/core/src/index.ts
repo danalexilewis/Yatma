@@ -27,3 +27,5 @@ export * from "./tools.ts";
 export * from "./review.ts";
 export * from "./connectionSchemas.ts";
 export * from "./taskCatalog.ts";
+
+export * from "./skills.ts";

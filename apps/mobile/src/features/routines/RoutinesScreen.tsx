@@ -1,11 +1,11 @@
 import { ADMIN_TEMPLATE, type StackTemplate } from "@yatma/core";
 import { randomUUID } from "expo-crypto";
+import { Link } from "expo-router";
 import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useStackPlayer } from "../player/PlayerProvider";
-import { Action, MinutesField } from "../today/TodayControls";
+import { Action } from "../today/TodayControls";
 import { useTheme } from "../../theme/theme";
-import { requestPlayerReminders } from "../../application/reminders";
 import { Screen, ScreenHeader } from "../../ui";
 
 export function RoutinesScreen() {
@@ -72,31 +72,14 @@ export function RoutinesScreen() {
         <View style={styles.section}>
           <Text style={[styles.heading, { color: theme.colors.ink }]}>Opening routine</Text>
           <Text style={{ color: theme.colors.muted }}>
-            Choose the opening for future days. Existing daily edits stay as they are.
+            Choose your default opening routine, breaks and allocations in Settings.
           </Text>
-          <View style={styles.actions}>
-            <Action
-              label="No routine"
-              selected={player.preferences.openingTemplateId === null}
-              onPress={() => {
-                void runtime.execute([
-                  { type: "preferences.update", set: { openingTemplateId: null } },
-                ]);
-              }}
-            />
-            {templates.map((template) => (
-              <Action
-                key={template.id}
-                label={template.title}
-                selected={player.preferences.openingTemplateId === template.id}
-                onPress={() => {
-                  void runtime.execute([
-                    { type: "preferences.update", set: { openingTemplateId: template.id } },
-                  ]);
-                }}
-              />
-            ))}
-          </View>
+          <Link
+            href="/settings?section=planning"
+            style={{ color: theme.colors.pine, paddingVertical: 12 }}
+          >
+            Planning &amp; focus settings →
+          </Link>
           {player.preferences.openingTemplateId ? (
             <Action
               label="Append selected routine"
@@ -129,73 +112,6 @@ export function RoutinesScreen() {
             onPress={() => void saveRoutine()}
             disabled={runtimeState.pending}
           />
-          <Text style={[styles.heading, { color: theme.colors.ink }]}>Breaks & allocations</Text>
-          <Action
-            label={
-              player.preferences.automaticBreaks ? "Automatic breaks: On" : "Automatic breaks: Off"
-            }
-            selected={player.preferences.automaticBreaks}
-            onPress={() => {
-              void runtime.execute([
-                {
-                  type: "preferences.update",
-                  set: { automaticBreaks: !player.preferences.automaticBreaks },
-                },
-              ]);
-            }}
-          />
-          <MinutesField
-            label="Work minutes between breaks"
-            value={player.preferences.workIntervalMinutes}
-            onSave={(minutes) =>
-              runtime.execute([
-                { type: "preferences.update", set: { workIntervalMinutes: minutes } },
-              ])
-            }
-          />
-          <MinutesField
-            label="Break duration in minutes"
-            value={player.preferences.breakMinutes}
-            onSave={(minutes) =>
-              runtime.execute([{ type: "preferences.update", set: { breakMinutes: minutes } }])
-            }
-          />
-          <MinutesField
-            label="Default task allocation in minutes"
-            value={player.preferences.defaultAllocationMinutes}
-            onSave={(minutes) =>
-              runtime.execute([
-                { type: "preferences.update", set: { defaultAllocationMinutes: minutes } },
-              ])
-            }
-          />
-          <Action
-            label="Enable time reminders"
-            onPress={() => {
-              void requestPlayerReminders()
-                .then(async (enabled) => {
-                  if (!enabled)
-                    setError(
-                      "Time reminders are unavailable or permission was denied. Work controls still keep time.",
-                    );
-                  else {
-                    setError(null);
-                    await runtime.reconcile();
-                  }
-                })
-                .catch(() =>
-                  setError("Could not enable time reminders. Work controls still keep time."),
-                );
-            }}
-          />
-          <Text style={{ color: theme.colors.muted }}>
-            Reminder:{" "}
-            {runtimeState.reminder === "scheduled"
-              ? "scheduled for the current allocation"
-              : runtimeState.reminder === "unavailable"
-                ? "unavailable; the player keeps time"
-                : "off"}
-          </Text>
         </View>
       </ScrollView>
     </Screen>

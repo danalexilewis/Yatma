@@ -74,4 +74,35 @@ describe("account model credentials", () => {
       }),
     ),
   );
+
+  it.effect("changes the model without reading or replacing an existing encrypted credential", () =>
+    withStore(
+      Effect.gen(function* () {
+        yield* service().save({ apiKey: key, model: "openai/gpt-4o-mini" });
+        const sql = yield* SqlClient.SqlClient;
+        const before = yield* sql`SELECT encrypted_key FROM model_settings`;
+        const status = yield* service().save({ model: "example/another-model" });
+        expect(status.model).toBe("example/another-model");
+        expect(status.source).toBe("personal");
+        expect(yield* sql`SELECT encrypted_key FROM model_settings`).toEqual(before);
+        expect(yield* service().resolve).toEqual({
+          model: "example/another-model",
+          openRouterKey: key,
+        });
+      }),
+    ),
+  );
+
+  it.effect("requires a personal credential before saving a model alone", () =>
+    withStore(
+      Effect.gen(function* () {
+        const failure = yield* Effect.flip(service().save({ model: "example/another-model" }));
+        expect(failure.message).toBe("personal_key_required");
+        expect(yield* service().resolve).toEqual({
+          model: "openai/gpt-4o-mini",
+          openRouterKey: "server-fallback",
+        });
+      }),
+    ),
+  );
 });

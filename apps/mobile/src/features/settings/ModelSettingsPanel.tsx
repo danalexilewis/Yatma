@@ -1,11 +1,15 @@
 import type { ModelSettings } from "@yatma/core";
+import { SaveModelSettings } from "@yatma/core";
+import * as Schema from "effect/Schema";
+import { Link } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 
 import { useAppStore } from "../../state/atoms";
 import { useSyncStatus } from "../../state/syncStatusAtom";
 import { getSyncEngine } from "../../sync/engine";
 import { useTheme } from "../../theme/theme";
+import { SettingsAction, SettingsField } from "./SettingsControls";
 
 /** Browser and native settings use the same account-owned Worker credential. */
 export function ModelSettingsPanel() {
@@ -18,6 +22,8 @@ export function ModelSettingsPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [showKey, setShowKey] = useState(false);
+  const [reload, setReload] = useState(0);
   const generation = useRef(0);
   const mountedAccount = useRef(state.accountId);
   if (mountedAccount.current !== state.accountId) {
@@ -29,6 +35,7 @@ export function ModelSettingsPanel() {
     const current = ++generation.current;
     setSettings(null);
     setApiKey("");
+    setShowKey(false);
     setModel("openai/gpt-4o-mini");
     setBusy(false);
     setNotice(null);
@@ -49,7 +56,7 @@ export function ModelSettingsPanel() {
     return () => {
       generation.current++;
     };
-  }, [state.accountId, connection]);
+  }, [state.accountId, connection, reload]);
 
   async function update(remove: boolean) {
     if (busy) return;
@@ -65,12 +72,22 @@ export function ModelSettingsPanel() {
     try {
       const result = remove
         ? await engine.client.removeModelSettings()
-        : await engine.client.saveModelSettings({ apiKey: apiKey.trim(), model: model.trim() });
+        : await engine.client.saveModelSettings({
+            ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+            model: model.trim(),
+          });
       if (generation.current !== current) return;
       setSettings(result);
       setModel(result.model);
       setApiKey("");
-      setNotice(remove ? "Personal key removed." : "Key saved. New chat requests will use it.");
+      setShowKey(false);
+      setNotice(
+        remove
+          ? "Personal key removed."
+          : apiKey.trim()
+            ? "Key saved. New chat requests will use it."
+            : "Model saved. New chat requests will use it.",
+      );
     } catch {
       if (generation.current === current)
         setError("Could not save AI settings. Check the key and model, then reconnect and retry.");
@@ -83,17 +100,13 @@ export function ModelSettingsPanel() {
   const canSave =
     connected &&
     settings?.canSaveKey &&
-    apiKey.trim().length >= 16 &&
-    model.trim().includes("/") &&
+    (apiKey.trim().length > 0 || settings.source === "personal") &&
+    (apiKey.trim().length > 0 || model.trim() !== settings.model) &&
+    Schema.is(SaveModelSettings)({
+      ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+      model: model.trim(),
+    }) &&
     !busy;
-  const inputStyle = {
-    color: theme.colors.ink,
-    borderColor: theme.colors.line,
-    borderWidth: 1,
-    borderRadius: 8,
-    minHeight: 44,
-    padding: 10,
-  };
   return (
     <View style={{ gap: 10 }}>
       <Text style={{ color: theme.colors.ink }}>
@@ -108,23 +121,42 @@ export function ModelSettingsPanel() {
                 : "Loading AI settings…"}
       </Text>
       <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>
-        The Cloudflare Worker runs chat. Your key is encrypted on the server for this account; it is
-        never included in synced tasks or exports. OpenRouter bills your account for usage.
+        Your key is encrypted and stored for this account, outside task sync and exports. OpenRouter
+        bills your account for usage. Saving a key does not test provider access.
       </Text>
-      <TextInput
+      {!state.accountId ? (
+        <Link href="/(auth)/sign-in" style={{ color: theme.colors.pine, paddingVertical: 12 }}>
+          Sign in to add your API key →
+        </Link>
+      ) : null}
+      <SettingsField
+        label="OpenRouter API key"
         accessibilityLabel="OpenRouter API key"
-        placeholder="OpenRouter API key"
+        placeholder={
+          settings?.source === "personal" ? "Key saved · enter a replacement" : "sk-or-v1-…"
+        }
         placeholderTextColor={theme.colors.muted}
         value={apiKey}
         onChangeText={setApiKey}
-        secureTextEntry
+        secureTextEntry={!showKey}
         autoCapitalize="none"
         autoCorrect={false}
         autoComplete="off"
         editable={connected && settings?.canSaveKey === true && !busy}
-        style={inputStyle}
+        hint={
+          settings?.source === "personal"
+            ? "Leave blank to keep your saved key when changing the model."
+            : "Enter your personal OpenRouter key to choose a model."
+        }
       />
-      <TextInput
+      {apiKey ? (
+        <SettingsAction
+          label={showKey ? "Hide key" : "Show key"}
+          onPress={() => setShowKey(!showKey)}
+        />
+      ) : null}
+      <SettingsField
+        label="Model"
         accessibilityLabel="OpenRouter model"
         placeholder="provider/model"
         placeholderTextColor={theme.colors.muted}
@@ -133,29 +165,25 @@ export function ModelSettingsPanel() {
         autoCapitalize="none"
         autoCorrect={false}
         editable={connected && !busy}
-        style={inputStyle}
+        hint="Use the model ID from OpenRouter, for example provider/model."
       />
       {connected && settings && !settings.canSaveKey ? (
         <Text style={{ color: theme.colors.danger }}>
           The server needs key-storage configuration before you can save a personal key.
         </Text>
       ) : null}
-      <Pressable
-        accessibilityRole="button"
+      <SettingsAction
+        primary
         disabled={!canSave}
         onPress={() => void update(false)}
-        style={{
-          backgroundColor: theme.colors.pine,
-          borderRadius: 10,
-          padding: 12,
-          minHeight: 44,
-          opacity: canSave ? 1 : 0.5,
-        }}
-      >
-        <Text style={{ color: theme.colors.onPine, textAlign: "center", fontWeight: "600" }}>
-          {busy ? "Saving…" : "Save API key"}
-        </Text>
-      </Pressable>
+        label={
+          busy
+            ? "Saving…"
+            : apiKey.trim() || settings?.source !== "personal"
+              ? "Save API key"
+              : "Save model"
+        }
+      />
       {settings?.source === "personal" ? (
         <Pressable
           accessibilityRole="button"
@@ -167,9 +195,16 @@ export function ModelSettingsPanel() {
         </Pressable>
       ) : null}
       {error ? (
-        <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
-          {error}
-        </Text>
+        <View style={{ gap: 8 }}>
+          <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
+            {error}
+          </Text>
+          <SettingsAction
+            label="Reload AI settings"
+            disabled={!connected || busy}
+            onPress={() => setReload(reload + 1)}
+          />
+        </View>
       ) : null}
       {notice ? (
         <Text accessibilityLiveRegion="polite" style={{ color: theme.colors.muted }}>

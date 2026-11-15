@@ -12,6 +12,7 @@ import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import { optionalRedacted, verifyClerkRequest, type AuthConfig } from "./auth.ts";
 import { createHealthApi } from "./http/health.ts";
 import { createUserApi, type UserApiContext } from "./http/user.ts";
+import { createSkillsApi, type SkillsApiContext } from "./http/skills.ts";
 import { createModelSettingsApi, type ModelSettingsApiContext } from "./http/modelSettings.ts";
 import { corsHeaders } from "./http/cors.ts";
 import { UserSpace, UserSpaceLive } from "./UserSpace.ts";
@@ -107,6 +108,41 @@ export const ApiLive = Api.make(
         if (!headers) return HttpServerResponse.text("Origin not allowed", { status: 403 });
         if (raw.method === "OPTIONS") return HttpServerResponse.empty({ status: 204, headers });
         const response = yield* Effect.gen(function* () {
+          if (url.pathname === "/api/skills" || url.pathname.startsWith("/api/skills/")) {
+            const verified = yield* verifyClerkRequest(authConfig, raw).pipe(Effect.option);
+            const principal = Option.isSome(verified) ? verified.value : null;
+            async function ownedClient(id: string) {
+              if (id !== principal?.userId) throw new Error("principal mismatch");
+              return Effect.runPromise(userSpaces.getByName(id));
+            }
+            const context: SkillsApiContext = {
+              listSkills: async (id) => {
+                const client = await ownedClient(id);
+                return Effect.runPromise(client["skills.list"]());
+              },
+              saveSkill: async (id, input) => {
+                const client = await ownedClient(id);
+                const result = await Effect.runPromise(
+                  client["skills.save"](input).pipe(Effect.result),
+                );
+                if (result._tag === "Failure") throw result.failure;
+                return result.success;
+              },
+              deleteSkill: async (id, skillId) => {
+                const client = await ownedClient(id);
+                return Effect.runPromise(client["skills.delete"]({ id: skillId }));
+              },
+            };
+            const result = yield* Effect.promise(() =>
+              createSkillsApi(principal).handle(raw, context),
+            );
+            const response = result.matched
+              ? result.response
+              : new Response("Not found", { status: 404 });
+            response.headers.set("Cache-Control", "no-store");
+            return HttpServerResponse.fromWeb(response);
+          }
+
           if (url.pathname.startsWith("/api/settings/")) {
             const verified = yield* verifyClerkRequest(authConfig, raw).pipe(Effect.option);
             const principal = Option.isSome(verified) ? verified.value : null;

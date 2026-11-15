@@ -1,3 +1,5 @@
+import { skillsContract } from "@yatma/contracts/skills";
+import type { SaveSkill } from "@yatma/core";
 import { gmailContract } from "@yatma/contracts/gmail";
 import { reviewContract, type ReviewSchedule } from "@yatma/contracts/review";
 /**
@@ -140,6 +142,7 @@ export function createSyncClient(options: SyncClientOptions) {
       ...gmailContract,
       ...reviewContract,
       ...modelSettingsContract,
+      ...skillsContract,
     },
     {
       baseUrl: apiUrl.toString(),
@@ -532,6 +535,9 @@ export function createSyncClient(options: SyncClientOptions) {
   }
 
   return {
+    listSkills: () => unwrapApiResult(api.listSkills({})),
+    saveSkill: (body: SaveSkill) => unwrapApiResult(api.saveSkill({ body })),
+    deleteSkill: (id: string) => unwrapApiResult(api.deleteSkill({ params: { id } })),
     getModelSettings: () => unwrapApiResult(api.getModelSettings({})),
     saveModelSettings: (body: SaveModelSettings) =>
       unwrapApiResult(api.saveModelSettings({ body })),

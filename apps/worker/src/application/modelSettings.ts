@@ -56,6 +56,14 @@ export function makeModelSettings(options: {
   });
   const save = (input: SaveModelSettings) =>
     Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      if (input.apiKey === undefined) {
+        const existing = yield* read;
+        if (!existing) return yield* new InternalError({ message: "personal_key_required" });
+        yield* sql`UPDATE model_settings SET model = ${input.model} WHERE id = 'openrouter'`;
+        return yield* get;
+      }
+      const apiKey = input.apiKey;
       const encrypted = yield* Effect.tryPromise({
         try: async () => {
           const key = await encryptionKey(options.encryptionSecret);
@@ -63,13 +71,12 @@ export function makeModelSettings(options: {
           const ciphertext = await crypto.subtle.encrypt(
             { name: "AES-GCM", iv, additionalData },
             key,
-            new TextEncoder().encode(input.apiKey),
+            new TextEncoder().encode(apiKey),
           );
           return `${encode(iv)}.${encode(new Uint8Array(ciphertext))}`;
         },
         catch: () => new InternalError({ message: "model_settings_unavailable" }),
       });
-      const sql = yield* SqlClient.SqlClient;
       yield* sql`INSERT INTO model_settings(id, model, encrypted_key)
       VALUES ('openrouter', ${input.model}, ${encrypted})
       ON CONFLICT(id) DO UPDATE SET model = excluded.model, encrypted_key = excluded.encrypted_key`;

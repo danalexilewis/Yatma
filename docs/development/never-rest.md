@@ -38,6 +38,11 @@ Runtime-specific code stays out of the shared package.
 | `@yatma/contracts/sync`   | `pushEvents` is mounted at `POST /api/sync/events`; Worker verifies Clerk before calling the UserSpace RPC |
 | `@yatma/contracts/turn`   | `startTurn`, `getTurn`, and `stopTurn` are mounted under `/api/turns`; observation remains on WebSocket  |
 
+Model-settings PUT accepts an optional replacement `apiKey`. Omitting it changes
+only the model for an existing personal credential; it cannot create a personal
+configuration without a key. Responses remain status-only. Deploy the compatible
+Worker before releasing a client that sends model-only updates.
+
 The declarations adapt existing core input/output schemas using
 `Schema.toStandardSchemaV1`. The Worker host verifies Clerk and supplies the
 verified user ID to the HTTP handlers; the handlers bridge to the existing

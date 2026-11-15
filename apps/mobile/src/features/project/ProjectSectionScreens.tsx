@@ -112,7 +112,7 @@ export function ProjectContextScreen() {
       ) : null}
 
       <Text style={[styles.section, { color: theme.colors.muted, marginTop: 16 }]}>
-        Agent context meter
+        Project context estimate
       </Text>
       <View style={[styles.meter, { backgroundColor: theme.colors.pineSoft }]}>
         <Text style={{ color: theme.colors.pine, fontWeight: "600" }}>
@@ -124,7 +124,10 @@ export function ProjectContextScreen() {
       </View>
 
       <Text style={[styles.section, { color: theme.colors.muted, marginTop: 16 }]}>
-        Exact model context
+        Project context preview
+      </Text>
+      <Text style={{ color: theme.colors.muted, fontSize: 13, marginBottom: 12 }}>
+        Conversation history and enabled skills also use model context. This preview shows the local project context.
       </Text>
       <Text
         style={{

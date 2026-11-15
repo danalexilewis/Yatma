@@ -1,6 +1,6 @@
 import type { ProjectId, Quadrant, Task } from "@yatma/core";
 import { localCalendarDate, MATRIX_QUADRANTS, quadrantLabel, selectThreadTasks } from "@yatma/core";
-import { useRouter } from "expo-router";
+import { useNavigation, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
@@ -14,6 +14,7 @@ import { DEFAULT_TRIAGE_CAPACITY, getTriageCapacity } from "./triagePreferences"
 export function TriageScreen() {
   const theme = useTheme();
   const store = useAppStore();
+  const navigation = useNavigation();
   const [projectId, setProjectId] = useState<ProjectId | null | undefined>(undefined);
   const [movingId, setMovingId] = useState<Task["id"] | null>(null);
   const [saving, setSaving] = useState(false);
@@ -23,9 +24,23 @@ export function TriageScreen() {
   const [swipeMode, setSwipeMode] = useState(false);
   useEffect(() => {
     let active = true;
-    void getTriageCapacity().then((value) => { if (active) setCapacity(value); });
-    return () => { active = false; };
-  }, []);
+    function refreshCapacity() {
+      if (!store.state.ready) return;
+      void getTriageCapacity()
+        .then((value) => {
+          if (active) setCapacity(value);
+        })
+        .catch(() => {
+          if (active) setError("Could not load the triage limit. Reopen triage to retry.");
+        });
+    }
+    refreshCapacity();
+    const unsubscribe = navigation.addListener("focus", refreshCapacity);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, [navigation, store.state.accountId, store.state.ready]);
   const tasks = selectThreadTasks(store.state.folded).filter(
     (task) => projectId === undefined || task.projectId === projectId,
   );

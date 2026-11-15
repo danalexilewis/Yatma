@@ -1,3 +1,4 @@
+import { SaveSkill, SkillIdentity, SkillList } from "./skills.ts";
 import {
   ReviewSchedule,
   GmailCompleteInput,
@@ -80,9 +81,9 @@ export const ModelSettings = Schema.Struct({
 });
 export type ModelSettings = typeof ModelSettings.Type;
 
-/** A replacement key is sent only to the authenticated settings endpoint. */
+/** Omit the key to change the model while retaining an existing personal credential. */
 export const SaveModelSettings = Schema.Struct({
-  apiKey: Schema.String.check(Schema.isPattern(/^\S{16,512}$/)),
+  apiKey: Schema.optional(Schema.String.check(Schema.isPattern(/^\S{16,512}$/))),
   model: Schema.String.check(Schema.isPattern(/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._:/-]{1,180}$/)),
 });
 export type SaveModelSettings = typeof SaveModelSettings.Type;
@@ -336,6 +337,18 @@ export const UsageGetRpc = Rpc.make("usage.get", {
   error: SpaceError,
 });
 
+export const SkillsListRpc = Rpc.make("skills.list", { success: SkillList, error: SpaceError });
+export const SkillSaveRpc = Rpc.make("skills.save", {
+  payload: SaveSkill,
+  success: SkillList,
+  error: SpaceError,
+});
+export const SkillDeleteRpc = Rpc.make("skills.delete", {
+  payload: SkillIdentity,
+  success: SkillList,
+  error: SpaceError,
+});
+
 export const ModelSettingsGetRpc = Rpc.make("model.settings.get", {
   success: ModelSettings,
   error: SpaceError,
@@ -385,6 +398,9 @@ export const GmailDisconnectRpc = Rpc.make("gmail.disconnect", {
   error: SpaceError,
 });
 export type SpaceRpcs =
+  | typeof SkillsListRpc
+  | typeof SkillSaveRpc
+  | typeof SkillDeleteRpc
   | typeof ModelSettingsGetRpc
   | typeof ModelSettingsSaveRpc
   | typeof ModelSettingsRemoveRpc
@@ -409,6 +425,9 @@ export type SpaceRpcs =
   | typeof GmailImportRpc
   | typeof GmailDisconnectRpc;
 export const SpaceRpcGroup: RpcGroup.RpcGroup<SpaceRpcs> = RpcGroup.make(
+  SkillsListRpc,
+  SkillSaveRpc,
+  SkillDeleteRpc,
   ModelSettingsGetRpc,
   ModelSettingsSaveRpc,
   ModelSettingsRemoveRpc,

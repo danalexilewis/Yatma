@@ -7,6 +7,7 @@ import { Screen, ScreenHeader } from "../../src/ui";
 
 const destinations = [
   { label: "Projects", icon: "folder-outline", href: "/projects" },
+  { label: "Skills", icon: "sparkles-outline", href: "/skills" },
   { label: "Routines", icon: "repeat-outline", href: "/routines" },
   { label: "Focus mode", icon: "expand-outline", href: "/focus" },
   { label: "Settings", icon: "settings-outline", href: "/settings" },

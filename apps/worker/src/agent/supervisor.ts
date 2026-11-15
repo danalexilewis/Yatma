@@ -1,3 +1,4 @@
+import type { Skill } from "@yatma/core";
 // Copyright (c) T3 Tools / MIT — adapted for Yatma
 import {
   type ChatId,
@@ -114,11 +115,13 @@ export function makeSupervisor<R = never>(input: {
   readonly mutations: MutationService;
   readonly model: string;
   readonly openRouterKey: string | null;
+  readonly skills?: readonly Skill[];
   /** Production resolves account credentials per turn, without persisting them in turn input. */
   readonly resolveModel?: () => Effect.Effect<
     {
       readonly model: string;
       readonly openRouterKey: string | null;
+      readonly skills?: readonly Skill[];
     },
     InternalError
   >;
@@ -184,6 +187,7 @@ export function makeSupervisor<R = never>(input: {
             turnId,
             model: config.model,
             openRouterKey: config.openRouterKey,
+            ...(config.skills ? { skills: config.skills } : {}),
             signal: controller.signal,
             mutations: input.mutations,
             ...(input.gateway ? { gateway: input.gateway } : {}),
