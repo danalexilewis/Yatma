@@ -8,10 +8,13 @@ import {
   Text,
   View,
   useWindowDimensions,
+  type PressableStateCallbackType,
 } from "react-native";
 import { useTheme } from "../theme/theme";
 
 type Option = { label: string; selected?: boolean; onPress: () => void };
+// React Native Web supplies hover state; native Pressable only supplies pressed.
+type MenuPressState = PressableStateCallbackType & { hovered?: boolean };
 export type ChoiceMenuGroup = { title?: string; options: Option[] };
 
 /** Anchored desktop menu; a bounded bottom sheet on narrow touch layouts. */
@@ -42,7 +45,7 @@ export function ChoiceMenu(props: {
         onPress={() =>
           trigger.current?.measureInWindow((x, y, _w, h) => setAnchor({ x, y: y + h }))
         }
-        style={({ hovered, pressed }) => [
+        style={({ hovered, pressed }: MenuPressState) => [
           styles.button,
           props.field && {
             minHeight: 44,
@@ -117,7 +120,7 @@ export function ChoiceMenu(props: {
                       option.onPress();
                       close();
                     }}
-                    style={({ hovered, pressed }) => [
+                    style={({ hovered, pressed }: MenuPressState) => [
                       styles.option,
                       {
                         backgroundColor:
