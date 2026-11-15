@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useState, type ReactNode, type Ref, type ComponentRef } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -7,6 +7,7 @@ import {
   Text,
   TextInput,
   View,
+  type TextInputProps,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -26,6 +27,19 @@ type ComposerProps = {
   readonly autoFocus?: boolean;
   readonly modeControl?: ReactNode;
   readonly inputLabel?: string;
+  /** Controlled caret and keyboard hooks support entity mentions without owning the caller's draft. */
+  readonly inputRef?: Ref<ComponentRef<typeof TextInput>>;
+  readonly selection?: TextInputProps["selection"];
+  readonly onSelectionChange?: TextInputProps["onSelectionChange"];
+  readonly onKeyPress?: TextInputProps["onKeyPress"];
+  readonly inputAccessibility?: {
+    readonly role?: TextInputProps["role"];
+    readonly "aria-expanded"?: boolean;
+    /** React Native Web supports these ARIA links although native TextInput's generated types omit them. */
+    readonly "aria-controls"?: string;
+    readonly "aria-activedescendant"?: string;
+    readonly "aria-autocomplete"?: "list";
+  };
 };
 
 /** Docked composer with an optional mode menu and trailing dictation/send actions. */
@@ -65,7 +79,12 @@ export function Composer(props: ComposerProps) {
           ]}
         >
           <TextInput
+            {...props.inputAccessibility}
+            ref={props.inputRef}
             accessibilityLabel={props.inputLabel}
+            selection={props.selection}
+            onSelectionChange={props.onSelectionChange}
+            onKeyPress={props.onKeyPress}
             value={props.value}
             onChangeText={props.onChangeText}
             placeholder={props.placeholder}

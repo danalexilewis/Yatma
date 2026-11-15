@@ -1,15 +1,9 @@
-export type ComposerMode = "message" | "task" | "project";
+export type ComposerInput =
+  | { readonly kind: "list" }
+  | { readonly kind: "message"; readonly text: string };
 
-/** Slash commands select a capture mode; ordinary slashes remain message text. */
-export function parseComposerInput(value: string, mode: ComposerMode) {
-  const command = /^\/(task|project|heading|message)(?:\s+|$)/i.exec(value);
-  return command
-    ? {
-        mode: (command[1]!.toLowerCase() === "heading"
-          ? "project"
-          : command[1]!.toLowerCase()) as ComposerMode,
-        text: value.slice(command[0].length),
-        command: true,
-      }
-    : { mode, text: value, command: false };
+/** Only a complete /list command is local; unknown commands and prose reach the conversation. */
+export function parseComposerInput(value: string): ComposerInput {
+  const text = value.trim();
+  return /^\/list$/i.test(text) ? { kind: "list" } : { kind: "message", text };
 }

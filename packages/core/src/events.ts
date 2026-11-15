@@ -23,10 +23,28 @@ import {
   Quadrant,
   Reason,
   TaskStatus,
+  TaskEstimateMinutes,
+  TaskContext,
   TaskTags,
+  TaskTodos,
+  TaskPriority,
   TaskUpdatedFields,
   Title,
 } from "./schemas.ts";
+
+import {
+  Day,
+  DayUpdatedFields,
+  DayEntry,
+  DayEntryUpdatedFields,
+  WorkInterval,
+  WorkIntervalUpdatedFields,
+  StackTemplate,
+  StackPreferencesUpdatedFields,
+  StackTimestamp,
+} from "./stackSchemas.ts";
+
+import { ReviewItem, ReviewUpdatedFields } from "./review.ts";
 
 const EnvelopeFields = {
   v: Schema.Literal(1),
@@ -67,6 +85,12 @@ export const TaskCreatedEvent = Schema.Struct({
   title: Title,
   tags: Schema.optional(TaskTags),
   notes: Schema.optional(Notes),
+  todos: Schema.optional(TaskTodos),
+  estimateMinutes: Schema.optional(TaskEstimateMinutes),
+  place: Schema.optional(TaskContext),
+  mentalMode: Schema.optional(TaskContext),
+  priority: Schema.optional(Schema.NullOr(TaskPriority)),
+  scheduledDate: Schema.optional(Schema.NullOr(Schema.String)),
   dueDate: Schema.optional(Schema.NullOr(Schema.String)),
   status: TaskStatus,
   quadrant: Schema.NullOr(Quadrant),
@@ -133,7 +157,89 @@ export const ChatUpdatedEvent = Schema.Struct({
 });
 export type ChatUpdatedEvent = typeof ChatUpdatedEvent.Type;
 
+const StackEnvelopeFields = { ...EnvelopeFields, at: StackTimestamp };
+
+export const DayCreatedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("day.created"),
+  day: Day,
+});
+export const DayUpdatedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("day.updated"),
+  dayId: TrimmedNonEmptyString,
+  set: DayUpdatedFields,
+  prev: Schema.optional(DayUpdatedFields),
+});
+export const DayEntryCreatedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("dayEntry.created"),
+  entry: DayEntry,
+});
+export const DayEntryUpdatedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("dayEntry.updated"),
+  entryId: TrimmedNonEmptyString,
+  set: DayEntryUpdatedFields,
+  prev: Schema.optional(DayEntryUpdatedFields),
+});
+export const WorkIntervalCreatedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("workInterval.created"),
+  interval: WorkInterval,
+});
+export const WorkIntervalUpdatedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("workInterval.updated"),
+  intervalId: TrimmedNonEmptyString,
+  set: WorkIntervalUpdatedFields,
+  prev: Schema.optional(WorkIntervalUpdatedFields),
+});
+export const StackTemplateSavedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("stackTemplate.saved"),
+  template: StackTemplate,
+  prev: Schema.optional(Schema.NullOr(StackTemplate)),
+});
+export const StackPreferencesUpdatedEvent = Schema.Struct({
+  ...StackEnvelopeFields,
+  type: Schema.Literal("stackPreferences.updated"),
+  set: StackPreferencesUpdatedFields,
+  prev: Schema.optional(StackPreferencesUpdatedFields),
+});
+export type DayCreatedEvent = typeof DayCreatedEvent.Type;
+export type DayUpdatedEvent = typeof DayUpdatedEvent.Type;
+export type DayEntryCreatedEvent = typeof DayEntryCreatedEvent.Type;
+export type DayEntryUpdatedEvent = typeof DayEntryUpdatedEvent.Type;
+export type WorkIntervalCreatedEvent = typeof WorkIntervalCreatedEvent.Type;
+export type WorkIntervalUpdatedEvent = typeof WorkIntervalUpdatedEvent.Type;
+export type StackTemplateSavedEvent = typeof StackTemplateSavedEvent.Type;
+export type StackPreferencesUpdatedEvent = typeof StackPreferencesUpdatedEvent.Type;
+
+export const ReviewReceivedEvent = Schema.Struct({
+  ...EnvelopeFields,
+  type: Schema.Literal("review.received"),
+  item: ReviewItem,
+});
+export const ReviewUpdatedEvent = Schema.Struct({
+  ...EnvelopeFields,
+  type: Schema.Literal("review.updated"),
+  itemId: TrimmedNonEmptyString,
+  set: ReviewUpdatedFields,
+  prev: Schema.optional(ReviewUpdatedFields),
+});
+
 export const Event = Schema.Union([
+  ReviewReceivedEvent,
+  ReviewUpdatedEvent,
+  DayCreatedEvent,
+  DayUpdatedEvent,
+  DayEntryCreatedEvent,
+  DayEntryUpdatedEvent,
+  WorkIntervalCreatedEvent,
+  WorkIntervalUpdatedEvent,
+  StackTemplateSavedEvent,
+  StackPreferencesUpdatedEvent,
   ProjectCreatedEvent,
   ProjectUpdatedEvent,
   TaskCreatedEvent,

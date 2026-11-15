@@ -1,14 +1,13 @@
-import type { BatchCommand, ChatStreamItem, Event, ProjectId } from "@yatma/core";
-import { generateShortId, PERSONAL_THREAD_ID } from "@yatma/core";
+import type { BatchCommand, ChatStreamItem, Event } from "@yatma/core";
+import { assistantMessageId, formatRef, generateShortId, PERSONAL_THREAD_ID } from "@yatma/core";
 import { useGlobalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
+import { ReviewPanel } from "./ReviewPanel";
 import { ChangeCard } from "./ChangeCard";
 import { summarizeChangeEvents } from "./changeSummary";
-import type { ComposerMode } from "./composerInput";
-import { MessageWithRefs } from "./RefUnfurl";
-import { TaskThread, TaskThreadSummary } from "./TaskThread";
+import { TaskThread } from "./TaskThread";
 import { ThreadComposer } from "./ThreadComposer";
 import { CaptureSheet } from "../capture/CaptureSheet";
 import { consumeCaptureOpen, subscribeCaptureOpen } from "../capture/captureIntent";
@@ -33,7 +32,7 @@ type LiveChange = {
   readonly summaryLabel: string;
 };
 
-/** The app's permanent thread. Current tasks are its default reading position. */
+/** The permanent conversation keeps its original replies and live task references. */
 export function ChatDetailScreen() {
   const {
     taskId,
@@ -45,11 +44,9 @@ export function ChatDetailScreen() {
   const store = useAppStore();
   const dictation = useDictation();
   const [draft, setDraft] = useState("");
-  const [projectId, setProjectId] = useState<ProjectId | null>(null);
-  const [composerMode, setComposerMode] = useState<ComposerMode>("message");
-  const [tasksCollapsed, setTasksCollapsed] = useState(false);
-  const [stickyTaskSummaryVisible, setStickyTaskSummaryVisible] = useState(false);
-  const [returnToPriorityRequest, setReturnToPriorityRequest] = useState(0);
+  const [followRequest, setFollowRequest] = useState(0);
+  const [streamTurnId, setStreamTurnId] = useState<string | null>(null);
+  const [streamAt, setStreamAt] = useState("");
   const [captureOpen, setCaptureOpen] = useState(false);
   const [streaming, setStreaming] = useState("");
   const [busy, setBusy] = useState(false);
@@ -60,10 +57,17 @@ export function ChatDetailScreen() {
   const composerSubmit = useRef<((text: string) => Promise<void>) | null>(null);
   const observedTurnIds = useRef(new Set<string>());
   const chat = store.state.folded.chats.get(PERSONAL_THREAD_ID);
+  const accountRef = useRef(store.state.accountId);
+  accountRef.current = store.state.accountId;
 
   useEffect(() => {
-    setTasksCollapsed(false);
-    setStickyTaskSummaryVisible(false);
+    setStreaming("");
+    setStreamTurnId(null);
+    setLiveChange(null);
+    setBusy(false);
+    setTurnId(null);
+    setDraft("");
+    setError(null);
   }, [store.state.accountId]);
 
   useEffect(() => {
@@ -81,12 +85,11 @@ export function ChatDetailScreen() {
     const discussedProject = [...store.state.folded.projects.values()].find(
       (item) => item.id === discussedProjectId,
     );
-    if (task) setDraft(`About [${task.title}](task:${task.id}): `);
-    else if (page) setDraft(`About [${page.title}](page:${page.id}): `);
+    if (task) setDraft(`About ${formatRef("task", task.id, task.title)}: `);
+    else if (page) setDraft(`About ${formatRef("page", page.id, page.title)}: `);
     else if (discussedProject)
-      setDraft(`About project ${discussedProject.title} (${discussedProject.id}): `);
+      setDraft(`About ${formatRef("project", discussedProject.id, discussedProject.title)}: `);
     else return;
-    setComposerMode("message");
     router.setParams({ taskId: undefined, pageId: undefined, projectId: undefined });
   }, [taskId, pageId, discussedProjectId, store.state.ready]);
 
@@ -94,6 +97,8 @@ export function ChatDetailScreen() {
     if (item.kind === "started") {
       observedTurnIds.current.add(item.turnId);
       setTurnId(item.turnId);
+      setStreamTurnId(item.turnId);
+      setStreamAt(new Date().toISOString());
     }
     if (item.kind === "text_delta") setStreaming((prev) => prev + item.text);
     if (item.kind === "changes") {
@@ -111,12 +116,13 @@ export function ChatDetailScreen() {
 
   useEffect(() => {
     if (
-      streaming &&
-      chat?.messages.some((message) => message.role === "assistant" && message.text === streaming)
+      streamTurnId &&
+      chat?.messages.some((message) => message.id === assistantMessageId(streamTurnId))
     ) {
       setStreaming("");
+      setStreamTurnId(null);
     }
-  }, [chat?.messages, streaming]);
+  }, [chat?.messages, streamTurnId]);
 
   useEffect(() => {
     if (!store.state.ready) return;
@@ -126,7 +132,6 @@ export function ChatDetailScreen() {
       try {
         const activeTurnId = await findActiveChatTurn(PERSONAL_THREAD_ID);
         if (!current || !activeTurnId || observedTurnIds.current.has(activeTurnId)) return;
-        setTasksCollapsed(true);
         setBusy(true);
         setError(null);
         setStreaming("");
@@ -206,6 +211,7 @@ export function ChatDetailScreen() {
 
   async function onSend(text: string) {
     if (busy) return;
+    const accountId = store.state.accountId;
     const messageId = generateShortId("c_");
     const commands: BatchCommand[] = [];
     if (!chat)
@@ -223,7 +229,8 @@ export function ChatDetailScreen() {
     });
     // Save the message before clearing the composer or starting network work.
     await store.executeLocalCommands(commands);
-    setTasksCollapsed(true);
+    if (accountRef.current !== accountId) return;
+    setFollowRequest((request) => request + 1);
     setDraft((current) => (current.trim() === text ? "" : current));
     setBusy(true);
     setError(null);
@@ -240,14 +247,19 @@ export function ChatDetailScreen() {
         projectId: null,
         messageId,
         text,
-        handlers: { onItem: applyTurnItem },
+        handlers: {
+          onItem: (item) => {
+            if (accountRef.current === accountId) applyTurnItem(item);
+          },
+        },
       });
     } catch (cause) {
+      if (accountRef.current !== accountId) return;
       setError(
         `Message saved. ${cause instanceof Error ? cause.message : "Could not reach Yatma. Try again when connected."}`,
       );
     } finally {
-      setBusy(false);
+      if (accountRef.current === accountId) setBusy(false);
     }
   }
 
@@ -279,7 +291,7 @@ export function ChatDetailScreen() {
     <Screen>
       <View style={styles.header}>
         <ScreenHeader
-          title="Your thread"
+          title="Plan with Yatma"
           trailing={
             <>
               {chat ? (
@@ -289,7 +301,10 @@ export function ChatDetailScreen() {
                   accessibilityState={{ disabled: busy }}
                   disabled={busy}
                   onPress={() => void onWrapUp()}
-                  style={[styles.wrapUp, { backgroundColor: theme.colors.pine, opacity: busy ? 0.5 : 1 }]}
+                  style={[
+                    styles.wrapUp,
+                    { backgroundColor: theme.colors.pine, opacity: busy ? 0.5 : 1 },
+                  ]}
                 >
                   <Text style={{ color: theme.colors.onPine, fontSize: 14, fontWeight: "700" }}>
                     Wrap up
@@ -299,39 +314,52 @@ export function ChatDetailScreen() {
             </>
           }
         />
+        <Text
+          style={{
+            color: theme.colors.muted,
+            fontSize: theme.type.meta,
+            lineHeight: 20,
+            paddingHorizontal: theme.space.screenX,
+            paddingBottom: 10,
+          }}
+        >
+          Gather context and shape your plan for Today. Type /list for your backlog, or mention
+          @task and @project.
+        </Text>
+        <ReviewPanel
+          key={store.state.accountId ?? "offline"}
+          busy={busy}
+          onDiscuss={(text) =>
+            setDraft((current) =>
+              current.trim()
+                ? `${current}
+
+${text}`
+                : text,
+            )
+          }
+        />
       </View>
       <TaskThread
         key={store.state.accountId ?? "offline"}
-        collapsed={tasksCollapsed}
-        onCollapse={() => setTasksCollapsed(true)}
-        onStickySummaryChange={setStickyTaskSummaryVisible}
-        returnToPriorityRequest={returnToPriorityRequest}
-        onChooseProject={(value) => {
-          setProjectId(value);
-          setComposerMode("task");
-        }}
+        followRequest={followRequest}
+        busy={busy}
+        activeTurn={
+          streamTurnId
+            ? { chatId: PERSONAL_THREAD_ID, turnId: streamTurnId, text: streaming, at: streamAt }
+            : undefined
+        }
         footer={
-          <>
-            {streaming ? (
-              <View style={styles.progress}>
-                <MessageWithRefs text={streaming} taskLinksOnly />
-              </View>
-            ) : busy ? (
-              <Text style={{ color: theme.colors.muted, fontSize: 13, paddingVertical: 10 }}>
-                Yatma is thinking…
-              </Text>
-            ) : null}
-            {liveChange ? (
-              <View style={styles.progress}>
-                <ChangeCard
-                  summary={summarizeChangeEvents(liveChange.events, [
-                    { label: liveChange.summaryLabel },
-                  ])}
-                  onUndo={() => setUndoDialogOpen(true)}
-                />
-              </View>
-            ) : null}
-          </>
+          liveChange ? (
+            <View style={styles.progress}>
+              <ChangeCard
+                summary={summarizeChangeEvents(liveChange.events, [
+                  { label: liveChange.summaryLabel },
+                ])}
+                onUndo={() => setUndoDialogOpen(true)}
+              />
+            </View>
+          ) : null
         }
       />
       <View style={styles.status}>
@@ -362,22 +390,11 @@ export function ChatDetailScreen() {
           </Text>
         ) : null}
       </View>
-      {tasksCollapsed || stickyTaskSummaryVisible ? (
-        <TaskThreadSummary
-          onExpand={() => {
-            if (tasksCollapsed) setTasksCollapsed(false);
-            else setReturnToPriorityRequest((request) => request + 1);
-          }}
-        />
-      ) : null}
       <ThreadComposer
         value={draft}
         onChangeText={setDraft}
-        projectId={projectId}
-        onProjectChange={setProjectId}
-        mode={composerMode}
-        onModeChange={setComposerMode}
         onMessage={onSend}
+        onLocalReply={() => setFollowRequest((request) => request + 1)}
         onMic={() => void onMic()}
         busy={busy}
         onStop={() => void onStop()}
@@ -389,7 +406,6 @@ export function ChatDetailScreen() {
         onClose={() => setCaptureOpen(false)}
         onSend={() => {
           setCaptureOpen(false);
-          setTasksCollapsed(true);
         }}
       />
       <UndoReasonDialog

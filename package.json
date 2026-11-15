@@ -2,23 +2,26 @@
   "name": "yatma",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.10.0",
-  "engines": {
-    "node": "^24"
-  },
   "scripts": {
     "dev": "pnpm --filter @yatma/mobile dev",
     "dev:web": "BROWSER=none pnpm --filter @yatma/mobile dev --web",
     "test": "vp test run",
     "typecheck": "pnpm -r run typecheck",
     "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:specs": "gurki lint docs/specs/thread-task-widgets.spec.md docs/specs/daily-stack-player.spec.md docs/specs/conversation-prioritisation.spec.md",
+    "profile:next-build": "node --experimental-strip-types scripts/profile-next-build.ts",
     "fmt": "vp fmt"
   },
   "devDependencies": {
-    "typescript": "catalog:",
-    "vite-plus": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
-    "happy-dom": "^21.0.1"
-  }
+    "gurki": "catalog:",
+    "happy-dom": "^21.0.1",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "engines": {
+    "node": "^24"
+  },
+  "packageManager": "pnpm@11.10.0"
 }

@@ -13,9 +13,9 @@ behavior, two-device sync/turn flows, and a configured EAS/App Store Connect
 tester build with real auth, model, and audio bindings. The private-alpha plan
 tracks these gates and their evidence separately from implementation checkmarks.
 
-The [next-build plan](../plans/next-build.md) orders the proposed F1–F4 and
-DS1–DS3 work with these existing boundaries. Its N01 task finalizes new domain
-and compatibility contracts before new day/player writers are enabled.
+The [next-build plan](../plans/next-build.md) records F1–F4 and DS1–DS3 implementation
+and acceptance evidence. Its N01 schemas and compatibility rules are implemented;
+the rollout still requires deployed readers/gates before compatible clients.
 
 ## Dependency direction
 
@@ -225,12 +225,13 @@ share entity identity but have distinct rendering keys. Reopening is an ordinary
 status edit; whole-turn Undo remains batch/provenance based. No new transport
 contract is needed for local widgets.
 
-Proposed local facade contracts are defined in the
+Local facade semantics are defined in the
 [widget plan](../plans/thread-task-widgets.md#key-facades-and-contracts): F1
 `TaskInteractions` wraps committed reads/status writes and shared pending state;
 F2 `ThreadTimeline` wraps windowed messages/reference presentation; F3
 `TaskNavigation` wraps task overlays and project navigation; F4 `ThreadCapture`
-wraps atomic manual task/receipt batches. These are not implemented services.
+wraps atomic manual task/receipt batches. All four are implemented as local modules
+over the existing store/writer, as recorded in section 10 below.
 The [Gurki acceptance specs](../specs/thread-task-widgets.spec.md) carry stable
 scenario-family IDs mapped to implementation tasks and verification in that plan.
 They distinguish immediate behavior, outputs, outcomes, and possible next
@@ -315,20 +316,56 @@ or a typed failure with recovery advice. Pending is not complete. The contract
 owner finalizes polling/retry semantics before implementation. Retain enough
 deletion progress to retry external failure; do not wipe the retry record first.
 
-## 10. Daily stack and player — proposed
+## 10. Daily stack and player — implemented locally
 
 The [daily-stack plan](../plans/daily-stack-player.md) defines DS1 `DailyStack`
 (daily entries, order, allocation, atomic next-day transfer), DS2 `StackPlayer`
 (device-owned time intervals, playback, completion, clock/reminder ports), and
 DS3 `StackTemplates` (opening sequence, queue composition, automatic break reconciliation).
 The [Gurki model](../specs/daily-stack-player.spec.md) contains target scenarios;
-none of these facades or new records is implemented yet.
+the [next-build execution ledger](../plans/next-build.md#execution-ledger--2026-11-10)
+separately records local tests, browser evidence and unverified external gates.
+
+| Boundary              | Implemented entry point                                                                          | Consumers / invariants                                                                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DS1                   | Mobile `application/dailyStack.ts`, shared `planBatch` + `dailyPolicy.ts`                        | Today/TaskSheet use existing local serialized writer; Worker writer uses the same planner. One semantic day per account/date retains its initial timezone; task/day identity deduplicates linked entries. |
+| DS2                   | Mobile `application/stackPlayer.ts`, `features/player/PlayerProvider.tsx`; core `stackPlayer.ts` | One runtime above routes; explicit actions commit before display. Supplied clocks and device ownership; timestamps survive reload; expiry never completes or advances.                                    |
+| DS3                   | Core `stackTemplates.ts`, daily commands through DS1                                             | Versioned snapshots instantiate independent entries. Future-only break reconciliation preserves manual edits, suppression and dismissed actual-work thresholds.                                           |
+| Clock/reminders/media | `application/reminders.ts`, `recordingLifecycle.ts`, `audioSession.ts`, player media components  | Account-generation fences and globally serialized reminder ownership; microphone ownership pauses ambience until native stop completes. Media preference changes emit no work events.                     |
+
+Exact additive schemas and command shapes are core `stackSchemas.ts` and
+`dailyCommands.ts`, exported by `@yatma/core`. Folded state has days, dayEntries,
+workIntervals, stackTemplates and stackPreferences in addition to existing maps.
+Both mobile and Worker journal/projection readers support them in atomic batches.
+Day ordering never changes task position/due date. Linked completion/deletion uses
+the shared planner and stops known intervals in the same commit. Historical task
+terminals also clamp unseen offline runs; impossible start-after-terminal records
+close at zero with a review reason. Overlaps remain inspectable and are not summed
+twice. Undo restores eligible daily fields, routine versions and corrections, while
+preserving later writes and never reopening historical intervals.
+
+Reader capability `eventSchemaVersion: 2` is independent of event envelope `v: 1`.
+Sync push/subscribe and all event-bearing turn/chat read/start/observe/wrap-up
+paths reject absent/older capabilities before writes or delivery. HTTP uses shared
+never-rest contracts with `upgrade_required: 426`; GET turn results receive the
+capability as a query string. Stream decoders validate complete event-bearing
+frames before callbacks/Ack. Unsupported reads fail closed without advancing
+cursors; client upgrade state preserves the outbox and stops futile retries.
+Server readers/gates must be deployed before compatible client writers roll out.
+
+F1–F4 are also implemented: account-scoped task interaction coordination is composed
+in `state/atoms.ts`; core thread selectors plus `features/chat/messageParts.ts` and
+`useThreadTimeline.ts` provide flattened 50/50/150 presentation; task navigation
+uses a transparent overlay; `application/threadCapture.ts` commits offline capture
+and capped Show tasks receipts through the existing writer. This bounds presentation,
+not full-journal storage hydration. Native/Cloudflare/connected-device acceptance
+remains outstanding as recorded in the execution ledger.
 
 Daily order/date are separate from `Task.position` and task due date. Linked
 task completion shares the mutation boundary with chat widgets; known local
 interval stop and daily entry resolution must commit with it. A run unseen on
 another offline device requires owner-side reconciliation, with effective stop
-time/clock-skew policy finalized in next-build N01; local atomicity cannot stop
+time/clock-skew policy implemented in next-build N01; local atomicity cannot stop
 an unseen offline run. F1 and DS2 share the core batch planner rather than calling
 each other. Extend/requeue/defer does not
 complete a task. Templates prepend an opening while preserving the work queue;
@@ -337,13 +374,42 @@ per day. Manual task/break edits take precedence over future reconciliation;
 suppression prevents removed breaks from immediately returning. Expanded-player
 scene selection is independent presentation/media state, not a timer command.
 
-This feature requires new core schemas/events/folds and explicit mobile/Worker
-cache/sync support. Final shared shapes and an old-client upgrade gate are DP0
-work, not an assumed property of existing sync. Preserve v1 task readers and
+The implemented core schemas/events/folds and explicit mobile/Worker cache/sync
+support retain v1 task readers. Preserve those readers and
 never advance cursors past unsupported events. Keep core Effect-only, shared
 never-rest contracts for any changed unary boundary, and existing host-owned
 streams. Offline playback cannot promise one globally exclusive runner; retain
 and surface cross-device interval overlap.
+
+## 11. Conversation planning — local implementation, 2026-11-11
+
+Conversation is the query/planning layer; Today/focus is the work surface.
+Shared Effect model-tool schemas remain in core `tools.ts` and are consumed by
+both real and scripted gateways. `read_day` reads the requested semantic day,
+entries/history, intervals and preferences without writing. `plan_day` translates
+explicit requested selections/allocations/order/removals through the existing
+Worker mutation service, with one audited reason and atomic failure. It does not
+assemble the backlog, start work or complete tasks. Entry/move targets must belong
+to that day. Project reads and stable `project:p_…` references share identity with
+manual project/task navigation. `list_tasks` returns total/nextOffset for complete
+inspection, honors explicit status, and excludes deleted tasks.
+
+Optional `TurnStartInput.planning` is the shared validated `{date, timezone}` DTO.
+The mobile adapter supplies its local calendar; the existing never-rest turn
+contract validates it; the supervisor persists/forwards it and includes it in
+retry identity only when supplied (legacy signatures remain valid). Model context
+uses this calendar and a bounded selected-stack summary; legacy calls use observed
+day context or ask for an unknown timezone. No separate planning HTTP endpoint was
+introduced. Suggestions alone do not invoke `plan_day`.
+
+Mobile `/list` uses the serialized local writer and live task refs, without a
+model connection or silent 50-task truncation. Mention insertion rechecks committed
+entity identity and escapes labels. Focus keeps the same account-owned runtime,
+with no separate global dock. New daily assembly opts out of backlog import;
+manual/routine/carried selections remain explicit, and historical fields/readers
+remain compatible. Legacy matrix URLs redirect to Today without deleting data.
+Local automated/browser evidence is recorded in the next-build refinements ledger;
+provider, deployed and native acceptance remain separate.
 
 ## Error vocabulary at the boundary
 
@@ -366,3 +432,96 @@ must already be safe: public disclosure strips diagnostic context/cause, but it
 does not sanitize an arbitrary message. `nextStep` is actionable advice; `origin`
 and cause/context serve trusted diagnostics. Never elevate disclosure from a
 caller-supplied header.
+
+## Conversation review and inbound work — 2026-11-11
+
+Local implementation extends the permanent conversation with durable review items,
+separate from task status and daily membership. Core `review.ts` / `reviewPolicy.ts`
+are the shared schema and policy; `review.received` and `review.updated` use the
+existing v1 event envelope and **reader capability 3**. Deploy compatible server
+readers/gates before new clients/producers. Existing records remain readable.
+
+`review.receive` deduplicates source identity/revision; `review.decide`, `review.seen`
+and `review.link` use the existing serialized writers. Both SQLite adapters project
+review items, and JSONL export includes their ordinary journal events. Field-aware
+Undo restores review choices without erasing provider receipts. Offline manual
+review uses the sync contract; no duplicate review-mutation HTTP API is introduced.
+Worker `read_review` pages evidence (10 default, maximum20; source snippets800 chars)
+and `decide_review` records explicit decisions and atomic Today selection, including
+creating/linking an external suggestion only on selection.
+
+`@yatma/contracts/review` declares mounted GET/POST `/api/review/schedule`;
+`@yatma/contracts/gmail` declares mounted status/begin/complete/import/disconnect
+operations. Mobile typed clients, HTTP hosts and internal UserSpace RPC share schema
+DTOs from `connectionSchemas.ts`. Host authentication selects the account; provider
+receipt events are rejected at client event ingress. The Gmail adapter uses read-only
+OAuth, bounded INBOX imports, server-only credentials and source identity by email
+plus message ID. Optional schedule callbacks share Alchemy's scheduler with curation.
+Account lifecycle checks and operation locks fence publication/import/deletion.
+
+See the [execution ledger](../plans/conversation-prioritisation.md#execution-ledger)
+and [Gmail configuration](../development/gmail.md). Automated/scripted tests and
+web observations do not establish real-provider, native or deployed acceptance.
+
+## Future project sharing boundary
+
+Target only; sharing, invitations and membership authorization are not implemented.
+`Task.projectId` remains nullable: a task belongs to zero or one project. The global
+Tasks catalog is a personal view over accessible tasks, not itself a shareable
+container. Projects provide the intended future collaboration boundary.
+
+Before enabling sharing, define project ownership, membership roles, invitations
+and revocation, then enforce access on server reads, commands and subscriptions.
+The current account-isolated `UserSpace` journal is not a shared-project authority;
+project-scoped storage/sync routing and migration need an explicit design. Client
+filtering or adding a share button is not an authorization boundary.
+
+Personal Today plans, preferences, conversations, unassigned tasks and time logs
+must not become shared simply because a project is shared. Decide which task
+fields/history become visible when moving a private task into a shared project,
+what happens on removal/revocation, and how personal time summaries are exposed
+before implementing that transition. No sharing schema or access flags are added
+by the standalone Tasks/Routines navigation work.
+
+## Task todos — 2026-11-11
+
+`Task.todos` is an optional ordered array of `{ text, done }` values, defaulting to
+empty for legacy events/cache rows. These are plain checklist strings with a
+completion bit, not task entities: no project, scheduling or task lifecycle.
+Create/update schemas and task events carry the same bounded schema (200 items,
+500 characters per nonempty string). The existing task mutation writer commits
+and projects the list atomically. Undo records/restores the whole field while
+respecting later edits; concurrent list edits use existing last-write semantics.
+
+Reader capability is now **4**, still with event envelope v1. Deploy matching
+server readers/gates before enabling these clients; old schema decoders can strip
+unknown checklist fields. Existing descriptions keep their `notes` storage/API
+field; only the user-facing task label changes to Description.
+
+## Priority and scheduled dates — 2026-11-11
+
+Task create/update/event schemas add nullable `priority` (high/medium/low) and
+`scheduledDate` (calendar date). Missing legacy values fold to null; `dueDate`
+remains a separate actual deadline. Shared planning/folding, local and Worker
+journal projections and field-aware Undo preserve the distinction. Schedule
+presets use explicit local-day input and Monday-based calendar weeks. No schema
+migration converts existing due dates into schedules. Retired place/mentalMode
+fields are preserved in historical readers but omitted from UI/planning context.
+
+Sync reader capability is now **5** (event envelope remains v1). Deploy matching
+Worker readers before new clients to prevent older decoders stripping new fields.
+The planning context includes importance, schedule and deadline separately.
+
+## Schedule-derived Today membership — 2026-11-11
+
+`Task.scheduledDate` is the authority for daily task membership. The shared batch
+planner reconciles affected existing days after schedule changes; `day.ensure`
+materializes tasks already scheduled for that day. Legacy daily add/remove/Tomorrow
+commands update the linked task schedule, so UI and agent entry points share the
+same rule. Pending execution entries are removed/revived without deleting work
+intervals or resetting allocation/order. Completed tasks do not become playable
+merely by retaining today's scheduled date. Activities remain independent entries.
+
+The mobile daily facade has one `scheduleTask` operation; the duplicate addTask
+operation and caller-side entry-removal planning have been removed. Schedule
+shortcuts use this same operation. No schema or transport capability change.

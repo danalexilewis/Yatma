@@ -1,5 +1,8 @@
 # Yatma private-alpha delivery plan
 
+Conversation review follow-on (2026-11-11): see [conversation prioritisation](conversation-prioritisation.md) for implementation status, Gmail setup, and remaining acceptance.
+
+
 Status: active. Baseline: review of `5f94c25` on 2026-10-13; plan started 2026-10-14.
 
 Next-build sequence updated 2026-11-10:
@@ -7,6 +10,18 @@ Next-build sequence updated 2026-11-10:
 across chat widgets, daily stacks/player, routines, automatic breaks, scenes,
 and these existing acceptance gates. This document remains the release umbrella;
 the linked feature plans retain detailed contracts and Gurki acceptance targets.
+
+Next-build implementation evidence (2026-11-10): conversation widgets, Today,
+daily persistence/player, routines, automatic breaks and focus scenes are now
+implemented locally. The [execution ledger](next-build.md#execution-ledger--2026-11-10)
+records 273 passing tests on Node 24, all package checks, browser SQLite recovery
+and the durable daily loop. Real connected-client/native/Cloudflare evidence and
+a configured tester build remain outstanding. All-platform JS exports are not
+native or tester acceptance.
+
+Scope confirmed 2026-11-11: the user requested local implementation delivery and
+explicitly left external N15–N17 acceptance pending. The missing environment and
+device work is deferred, not a request to provision or deploy services now.
 
 ## Delivery checklist
 

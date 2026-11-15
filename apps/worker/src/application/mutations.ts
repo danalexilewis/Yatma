@@ -96,6 +96,7 @@ export const makeCommitHub = Effect.gen(function* () {
 });
 
 export interface ExecuteBatchInput {
+  readonly reason?: string;
   readonly commands: readonly BatchCommand[];
   readonly actor: Actor;
   readonly batchId?: BatchId;
@@ -106,7 +107,11 @@ export interface ExecuteBatchInput {
 export interface MutationService {
   readonly executeBatch: (
     input: ExecuteBatchInput,
-  ) => Effect.Effect<MutationResult, MutationFailure | SqlError.SqlError | InternalError, SqlClient.SqlClient>;
+  ) => Effect.Effect<
+    MutationResult,
+    MutationFailure | SqlError.SqlError | InternalError,
+    SqlClient.SqlClient
+  >;
   readonly observeCommits: CommitHub["observe"];
   readonly observeAfter: CommitHub["observeAfter"];
   readonly pushIncomingBatch: (
@@ -167,7 +172,9 @@ export function makeMutationService(
               }
             }
             const context: PlanBatchContext = {
+              ...(input.reason ? { reason: input.reason } : {}),
               actor: input.actor,
+              now,
               batchId: requestedBatchId,
               ...(input.undoes ? { undoes: input.undoes } : {}),
             };

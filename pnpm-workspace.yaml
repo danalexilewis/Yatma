@@ -3,6 +3,7 @@ packages:
   - packages/*
 
 allowBuilds:
+  gurki@https://codeload.github.com/danalexilewis/gurki/tar.gz/d1b1f7fad53fc5c880a23faccd9007cdce7fa250: true
   browser-tabs-lock: false
   core-js: false
   workerd: false
@@ -23,6 +24,8 @@ catalog:
   "@types/node": 24.12.4
   "@legendapp/list": 3.3.5
   expo-audio: 58.0.9
+  expo-notifications: 58.1.1
+  gurki: github:danalexilewis/gurki#d1b1f7fad53fc5c880a23faccd9007cdce7fa250
 
 # Draggable FlatList 4.0.3 still imports InteractionManager, removed in RN 0.88.
 # The patch defers its post-render drag reset with requestAnimationFrame instead.

@@ -1,5 +1,13 @@
 import type { ContractDef } from "@eddy-works/never-rest/contract";
-import { TurnGetInput, TurnGetResult, TurnStartInput, TurnReceipt, TurnStopInput, TurnStopResult } from "@yatma/core";
+import {
+  EventReaderQuery,
+  TurnGetInput,
+  TurnGetResult,
+  TurnStartInput,
+  TurnReceipt,
+  TurnStopInput,
+  TurnStopResult,
+} from "@yatma/core";
 import * as Schema from "effect/Schema";
 
 /** Unary turn controls share the core DTOs; progress remains on the host stream. */
@@ -16,14 +24,21 @@ export const turnContract = {
     path: "/api/turns",
     body: StartTurnInput,
     output: StartTurnOutput,
-    errors: { unauthorized: 401, invalid_request: 422, budget_exceeded: 429, service_unavailable: 503 },
+    errors: {
+      unauthorized: 401,
+      invalid_request: 422,
+      upgrade_required: 426,
+      budget_exceeded: 429,
+      service_unavailable: 503,
+    },
   },
   getTurn: {
     method: "GET",
     path: "/api/turns/:turnId",
     params: Schema.toStandardSchemaV1(Schema.Struct({ turnId: Schema.String })),
+    query: Schema.toStandardSchemaV1(EventReaderQuery),
     output: GetTurnOutput,
-    errors: { unauthorized: 401, not_found: 404, service_unavailable: 503 },
+    errors: { unauthorized: 401, not_found: 404, upgrade_required: 426, service_unavailable: 503 },
   },
   stopTurn: {
     method: "POST",
@@ -31,6 +46,12 @@ export const turnContract = {
     params: Schema.toStandardSchemaV1(Schema.Struct({ turnId: Schema.String })),
     body: StopTurnInput,
     output: StopTurnOutput,
-    errors: { unauthorized: 401, not_found: 404, invalid_request: 422, service_unavailable: 503 },
+    errors: {
+      unauthorized: 401,
+      not_found: 404,
+      invalid_request: 422,
+      upgrade_required: 426,
+      service_unavailable: 503,
+    },
   },
 } as const satisfies ContractDef;

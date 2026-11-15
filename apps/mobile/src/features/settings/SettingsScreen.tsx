@@ -1,13 +1,12 @@
 import { useAuth, useUser } from "@clerk/expo";
 import type { PingResult, UsageGetResult } from "@yatma/core";
 import { useEffect, useState, type ReactNode } from "react";
-import { Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { Alert, Pressable, StyleSheet, Switch, Text, View } from "react-native";
 
 import { wipeLocalData } from "../../db/database";
 import { shareEventsJsonl } from "../../export/jsonl";
 import { getSyncEngine } from "../../sync/engine";
 import { getAutoSendDictation, setAutoSendDictation } from "./autoSendPreference";
-import { DEFAULT_TRIAGE_CAPACITY, getTriageCapacity, setTriageCapacity } from "../triage/triagePreferences";
 import { useTheme } from "../../theme/theme";
 import { Screen } from "../../ui";
 
@@ -68,37 +67,20 @@ function SettingsBody(props: {
   const [pingError, setPingError] = useState<string | null>(null);
   const [usage, setUsage] = useState<UsageGetResult | null>(null);
   const [usageError, setUsageError] = useState<string | null>(null);
-  const [triageCapacity, setTriageCapacityValue] = useState(String(DEFAULT_TRIAGE_CAPACITY));
 
   useEffect(() => {
     let active = true;
-    void getAutoSendDictation().then(setting => {
-      if (active) setAutoSend(setting);
-    }).catch(error => {
-      Alert.alert("Settings unavailable", error instanceof Error ? error.message : String(error));
-    });
+    void getAutoSendDictation()
+      .then((setting) => {
+        if (active) setAutoSend(setting);
+      })
+      .catch((error) => {
+        Alert.alert("Settings unavailable", error instanceof Error ? error.message : String(error));
+      });
     return () => {
       active = false;
     };
   }, []);
-
-  useEffect(() => {
-    let active = true;
-    void getTriageCapacity().then((capacity) => {
-      if (active) setTriageCapacityValue(String(capacity));
-    });
-    return () => { active = false; };
-  }, []);
-
-  async function onSaveTriageCapacity() {
-    const value = Number(triageCapacity);
-    try {
-      await setTriageCapacity(value);
-      setTriageCapacityValue(String(value));
-    } catch (error) {
-      Alert.alert("Could not save capacity", error instanceof Error ? error.message : String(error));
-    }
-  }
 
   async function onAutoSendChange(enabled: boolean) {
     setAutoSend(enabled);
@@ -162,32 +144,28 @@ function SettingsBody(props: {
   }
 
   function onDeleteAccount() {
-    Alert.alert(
-      "Delete account",
-      "This will wipe local data and request remote deletion.",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => {
-            void (async () => {
-              setBusy(true);
-              try {
-                await props.onDeleteAccount();
-              } catch (error) {
-                Alert.alert(
-                  "Delete failed",
-                  error instanceof Error ? error.message : "Unknown error",
-                );
-              } finally {
-                setBusy(false);
-              }
-            })();
-          },
+    Alert.alert("Delete account", "This will wipe local data and request remote deletion.", [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: () => {
+          void (async () => {
+            setBusy(true);
+            try {
+              await props.onDeleteAccount();
+            } catch (error) {
+              Alert.alert(
+                "Delete failed",
+                error instanceof Error ? error.message : "Unknown error",
+              );
+            } finally {
+              setBusy(false);
+            }
+          })();
         },
-      ],
-    );
+      },
+    ]);
   }
 
   return (
@@ -206,14 +184,17 @@ function SettingsBody(props: {
         <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
           {usage
             ? `${usage.used.toLocaleString()} / ${usage.limit.toLocaleString()} tokens`
-            : usageError ?? "Loading usage…"}
+            : (usageError ?? "Loading usage…")}
         </Text>
         {usage ? (
           <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 4 }}>
             Resets {new Date(usage.resetsAt).toLocaleString()}
           </Text>
         ) : null}
-        <Pressable onPress={() => void onRefreshUsage()} style={{ minHeight: 36, justifyContent: "center" }}>
+        <Pressable
+          onPress={() => void onRefreshUsage()}
+          style={{ minHeight: 36, justifyContent: "center" }}
+        >
           <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta, fontWeight: "600" }}>
             Refresh usage
           </Text>
@@ -233,27 +214,11 @@ function SettingsBody(props: {
         </View>
       </Section>
 
-      <Section title="Task triage">
-        <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>
-          Maximum tasks in each bucket
-        </Text>
-        <TextInput
-          accessibilityLabel="Maximum tasks per triage bucket"
-          value={triageCapacity}
-          onChangeText={setTriageCapacityValue}
-          onBlur={() => void onSaveTriageCapacity()}
-          keyboardType="number-pad"
-          returnKeyType="done"
-          onSubmitEditing={() => void onSaveTriageCapacity()}
-          style={{ color: theme.colors.ink, borderColor: theme.colors.line, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginTop: 8, width: 100 }}
-        />
-        <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 6 }}>
-          Choose a limit from 1 to 1000. Full buckets cannot accept more tasks.
-        </Text>
-      </Section>
-
       <Section title="Debug">
-        <Pressable onPress={() => void onPing()} style={{ minHeight: 36, justifyContent: "center" }}>
+        <Pressable
+          onPress={() => void onPing()}
+          style={{ minHeight: 36, justifyContent: "center" }}
+        >
           <Text style={{ color: theme.colors.ink, fontSize: theme.type.row, fontWeight: "500" }}>
             Ping sync server
           </Text>

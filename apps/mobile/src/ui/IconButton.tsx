@@ -1,5 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Pressable, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
+import { Platform, Pressable, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 
 import { useTheme } from "../theme/theme";
 
@@ -7,6 +7,7 @@ type IconName = keyof typeof Ionicons.glyphMap;
 
 type IconButtonProps = {
   readonly name: IconName;
+  readonly tooltip?: string;
   readonly onPress?: () => void;
   readonly onLongPress?: () => void;
   readonly accessibilityLabel: string;
@@ -27,6 +28,9 @@ export function IconButton(props: IconButtonProps) {
       disabled={props.disabled}
       accessibilityRole="button"
       accessibilityLabel={props.accessibilityLabel}
+      {...(Platform.OS === "web"
+        ? { dataSet: { tooltip: props.tooltip ?? props.accessibilityLabel } }
+        : {})}
       hitSlop={8}
       style={({ pressed }) => [
         styles.hit,

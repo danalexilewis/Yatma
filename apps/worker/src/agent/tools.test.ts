@@ -1,13 +1,6 @@
 // Copyright (c) T3 Tools / MIT — adapted for Yatma
 import { describe, expect, it } from "@effect/vitest";
-import {
-  BatchId,
-  ChatId,
-  DeviceId,
-  EventId,
-  TaskId,
-  type Event,
-} from "@yatma/core";
+import { BatchId, ChatId, DeviceId, EventId, TaskId, type Event } from "@yatma/core";
 import * as Effect from "effect/Effect";
 
 import * as EventStore from "../eventStore.ts";
@@ -240,5 +233,49 @@ describe("agent/tools apply_changes", () => {
         );
       }),
     ),
+  );
+  it.effect(
+    "paginates filtered tasks without hiding explicit completed status or including deletions",
+    () =>
+      withStore(
+        Effect.gen(function* () {
+          const mutations = makeMutationService(yield* makeCommitHub);
+          const taskIds = Array.from({ length: 107 }, (_, index) =>
+            TaskId.make(`t_${String(index).padStart(8, "0")}`),
+          );
+          yield* mutations.executeBatch({
+            actor: DEVICE,
+            now: "2026-11-11T00:00:00.000Z",
+            commands: [
+              ...taskIds.map((taskId, index) => ({
+                type: "task.create" as const,
+                taskId,
+                input: { title: `Candidate ${index}` },
+              })),
+              { type: "task.update", input: { taskId: taskIds[105]!, status: "done" } },
+              {
+                type: "task.update",
+                input: { taskId: taskIds[106]!, status: "done", deleted: true },
+              },
+            ],
+          });
+          const first = yield* Tools.listTasks({ limit: 100 });
+          expect(first.tasks).toHaveLength(100);
+          expect(first.total).toBe(105);
+          expect(first.nextOffset).toBe(100);
+          const second = yield* Tools.listTasks({ offset: first.nextOffset!, limit: 100 });
+          expect(second.tasks).toHaveLength(5);
+          expect(second.total).toBe(105);
+          expect(second.nextOffset).toBeNull();
+          expect(new Set([...first.tasks, ...second.tasks].map((task) => task.id)).size).toBe(105);
+          const completed = yield* Tools.listTasks({ status: "done" });
+          expect(completed.tasks.map((task) => task.id)).toEqual([taskIds[105]]);
+          expect(completed.total).toBe(1);
+          expect(completed.nextOffset).toBeNull();
+          const all = yield* Tools.listTasks({ includeRecentDone: true, limit: 200 });
+          expect(all.total).toBe(106);
+          expect(all.tasks.some((task) => task.id === taskIds[106])).toBe(false);
+        }),
+      ),
   );
 });

@@ -1,9 +1,16 @@
 import { PERSONAL_THREAD_ID } from "@yatma/core";
-import type { ChatStreamItem, ChatWrapUpResult, Event, TurnGetResult, TurnReceipt } from "@yatma/core";
+import type {
+  ChatStreamItem,
+  ChatWrapUpResult,
+  Event,
+  TurnGetResult,
+  TurnReceipt,
+} from "@yatma/core";
 
 import { getSyncMeta, loadOutboxEvents, setSyncMeta } from "../db/database";
 import { getSyncEngine } from "./engine";
 import type { SyncClient } from "./client";
+import { localPlanningDay } from "../application/dailyStack";
 
 export type ChatSendHandlers = {
   readonly onItem: (item: ChatStreamItem) => void;
@@ -23,7 +30,12 @@ function activeTurnKey(chatId: string): string {
 }
 
 function isTerminalStatus(status: TurnReceipt["status"]): boolean {
-  return status === "completed" || status === "stopped" || status === "failed" || status === "interrupted";
+  return (
+    status === "completed" ||
+    status === "stopped" ||
+    status === "failed" ||
+    status === "interrupted"
+  );
 }
 
 async function clearActiveTurn(chatId: string, turnId: string): Promise<void> {
@@ -57,6 +69,8 @@ export async function sendChatTurn(input: {
     throw new Error("sync not connected");
   }
   const events = await loadOutboxEvents();
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const planning = { date: localPlanningDay(new Date(), timezone), timezone };
   try {
     const receipt = await engine.client.turnStart({
       requestId: input.requestId ?? createRequestId("req"),
@@ -65,12 +79,12 @@ export async function sendChatTurn(input: {
       projectId: input.projectId as never,
       text: input.text,
       events,
+      planning,
     });
     await setSyncMeta(activeTurnKey(receipt.chatId), receipt.turnId);
     input.handlers.onItem({ kind: "started", chatId: receipt.chatId, turnId: receipt.turnId });
-    const observation = engine.client.turnObserve(
-      { turnId: receipt.turnId, after: 1 },
-      (frame) => input.handlers.onItem(frame.item),
+    const observation = engine.client.turnObserve({ turnId: receipt.turnId, after: 1 }, (frame) =>
+      input.handlers.onItem(frame.item),
     );
     await observation.ready;
     await observation.completion;
@@ -103,9 +117,8 @@ export function observeChatTurn(input: {
 }): { readonly ready: Promise<void>; readonly completion: Promise<void> } {
   const engine = getSyncEngine();
   if (!engine) throw new Error("sync not connected");
-  return engine.client.turnObserve(
-    { turnId: input.turnId, after: input.after ?? 0 },
-    (frame) => input.handlers.onItem(frame.item),
+  return engine.client.turnObserve({ turnId: input.turnId, after: input.after ?? 0 }, (frame) =>
+    input.handlers.onItem(frame.item),
   );
 }
 
@@ -157,9 +170,8 @@ export async function resumeChatTurn(input: {
     return result;
   }
 
-  const observation = engine.client.turnObserve(
-    { turnId, after: 1 },
-    (frame) => input.handlers.onItem(frame.item),
+  const observation = engine.client.turnObserve({ turnId, after: 1 }, (frame) =>
+    input.handlers.onItem(frame.item),
   );
   await observation.ready;
   await observation.completion;

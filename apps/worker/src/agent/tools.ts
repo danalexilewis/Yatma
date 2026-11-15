@@ -20,6 +20,7 @@ import {
   ProjectId as ProjectIdSchema,
   TaskId as TaskIdSchema,
   generateEventId,
+  latestWritesFromEvents,
   generateShortId,
   isOpenTask,
   planCreate,
@@ -37,6 +38,8 @@ import * as Schema from "effect/Schema";
 
 import * as EventStore from "../eventStore.ts";
 import type { MutationService } from "../application/mutations.ts";
+
+export { readDay, planDay } from "./dailyPlanning.ts";
 
 /** Resolve a shared schema tool by its provider-facing name. */
 export function getToolkitTool(name: string): Tool.Any | undefined {
@@ -56,6 +59,7 @@ export type ListTasksInput = {
   quadrant?: Task["quadrant"];
   includeRecentDone?: boolean;
   limit?: number;
+  offset?: number;
 };
 
 export type SearchHit =
@@ -69,6 +73,7 @@ export type SearchHit =
     };
 
 export type ReadResult =
+  | { readonly kind: "project"; readonly project: Project; readonly tasks: readonly Task[] }
   | { readonly kind: "task"; readonly task: Task; readonly history: readonly Event[] }
   | { readonly kind: "page"; readonly page: Page }
   | {
@@ -96,10 +101,7 @@ function fail(message: string): ToolFailure {
 }
 
 /** Stamp server-assigned seq onto events that were accepted in a push. */
-function attachAssignedSeqs(
-  events: readonly Event[],
-  result: SyncPushResult,
-): Event[] {
+function attachAssignedSeqs(events: readonly Event[], result: SyncPushResult): Event[] {
   const seqById = new Map(result.assigned.map((row) => [row.id, row.seq]));
   return events
     .filter((event) => seqById.has(event.id))
@@ -109,7 +111,7 @@ function attachAssignedSeqs(
 /** List open (or filtered) tasks in global priority order. */
 export const listTasks = Effect.fn("AgentTools.listTasks")(function* (input: ListTasksInput = {}) {
   const folded = yield* EventStore.loadFolded;
-  let tasks = [...folded.tasks.values()];
+  let tasks = [...folded.tasks.values()].filter((task) => task.deletedAt === null);
   if (input.projectId !== undefined) {
     tasks = tasks.filter((task) => task.projectId === input.projectId);
   }
@@ -119,12 +121,15 @@ export const listTasks = Effect.fn("AgentTools.listTasks")(function* (input: Lis
   if (input.quadrant !== undefined) {
     tasks = tasks.filter((task) => task.quadrant === input.quadrant);
   }
-  if (!input.includeRecentDone) {
+  if (input.status === undefined && !input.includeRecentDone) {
     tasks = tasks.filter(isOpenTask);
   }
   const sorted = sortTasksByPosition(tasks);
   const limit = input.limit ?? 100;
-  return { tasks: sorted.slice(0, limit) };
+  const offset = input.offset ?? 0;
+  const tasksPage = sorted.slice(offset, offset + limit);
+  const nextOffset = offset + tasksPage.length < sorted.length ? offset + tasksPage.length : null;
+  return { tasks: tasksPage, total: sorted.length, nextOffset };
 });
 
 /** FTS5 search over tasks, pages, and chat summaries. */
@@ -177,11 +182,20 @@ export const search = Effect.fn("AgentTools.search")(function* (input: {
 /** Read a task (+ history), page, or chat summary. */
 export const read = Effect.fn("AgentTools.read")(function* (
   input:
+    | { readonly kind: "project"; readonly projectId: ProjectId }
     | { readonly kind: "task"; readonly taskId: TaskId }
     | { readonly kind: "page"; readonly pageId: PageId }
     | { readonly kind: "chat"; readonly chatId: ChatId },
 ) {
   const folded = yield* EventStore.loadFolded;
+  if (input.kind === "project") {
+    const project = folded.projects.get(input.projectId);
+    if (!project) return fail(`project not found: ${input.projectId}`);
+    const tasks = sortTasksByPosition([...folded.tasks.values()]).filter(
+      (task) => task.projectId === project.id && task.deletedAt === null,
+    );
+    return { kind: "project" as const, project, tasks } satisfies ReadResult;
+  }
   if (input.kind === "task") {
     const task = folded.tasks.get(input.taskId);
     if (!task) return fail(`task not found: ${input.taskId}`);
@@ -261,11 +275,7 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
   ctx: ToolActorContext,
 ) {
   if (input.ops.length === 0) return fail("ops must be non-empty");
-  if (
-    ctx.mutations &&
-    input.ops.some((op) => op.op === "undo_batch") &&
-    input.ops.length !== 1
-  ) {
+  if (ctx.mutations && input.ops.some((op) => op.op === "undo_batch") && input.ops.length !== 1) {
     return fail("undo_batch must be the only operation in a mutation-backed batch");
   }
 
@@ -448,14 +458,114 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
     // undo_batch
     const batchEvents = yield* EventStore.eventsForBatch(op.batchId);
     if (batchEvents.length === 0) return fail(`batch not found: ${op.batchId}`);
-    const undo = planUndo(batchEvents, {
-      projects: new Map(projects.map((project) => [project.id, project])),
-      tasks: new Map(tasks.map((task) => [task.id, task])),
-      pages: folded.pages,
-      chats: folded.chats,
-    });
+    const undo = planUndo(
+      batchEvents,
+      {
+        ...folded,
+        projects: new Map(projects.map((project) => [project.id, project])),
+        tasks: new Map(tasks.map((task) => [task.id, task])),
+        pages: folded.pages,
+        chats: folded.chats,
+      },
+      latestWritesFromEvents(folded.events),
+    );
     for (const revert of undo.reverts) {
-      if (revert.type === "task.updated") {
+      if (revert.type === "review.updated") {
+        const current = folded.reviewItems.get(revert.itemId);
+        if (!current) continue;
+        const prev = Object.fromEntries(
+          Object.keys(revert.set).map((key) => [key, Reflect.get(current, key)]),
+        );
+        planned.push({
+          kind: "event",
+          event: {
+            v: 1,
+            type: "review.updated",
+            id: generateEventId(),
+            at: ctx.nowIso,
+            by: ctx.actor,
+            batch: ctx.batchId,
+            undoes: BatchIdSchema.make(op.batchId),
+            itemId: revert.itemId,
+            set: revert.set,
+            prev,
+          },
+        });
+      } else if (revert.type === "stackTemplate.saved") {
+        planned.push({
+          kind: "event",
+          event: {
+            v: 1,
+            type: "stackTemplate.saved",
+            id: generateEventId(),
+            at: ctx.nowIso,
+            by: ctx.actor,
+            batch: ctx.batchId,
+            undoes: BatchIdSchema.make(op.batchId),
+            template: revert.template,
+            prev: folded.stackTemplates.get(revert.template.id) ?? null,
+          },
+        });
+      } else if (revert.type === "workInterval.updated") {
+        const interval = folded.workIntervals.get(revert.intervalId);
+        if (!interval) continue;
+        planned.push({
+          kind: "event",
+          event: {
+            v: 1,
+            type: "workInterval.updated",
+            id: generateEventId(),
+            at: ctx.nowIso,
+            by: ctx.actor,
+            batch: ctx.batchId,
+            undoes: BatchIdSchema.make(op.batchId),
+            intervalId: revert.intervalId,
+            set: revert.set,
+            prev: { correctedSeconds: interval.correctedSeconds },
+          },
+        });
+      } else if (revert.type === "dayEntry.updated") {
+        const entry = folded.dayEntries.get(revert.entryId);
+        if (!entry) continue;
+        const prev = Object.fromEntries(
+          Object.keys(revert.set).map((key) => [key, entry[key as keyof typeof entry]]),
+        );
+        planned.push({
+          kind: "event",
+          event: {
+            v: 1,
+            type: "dayEntry.updated",
+            id: generateEventId(),
+            at: ctx.nowIso,
+            by: ctx.actor,
+            batch: ctx.batchId,
+            undoes: BatchIdSchema.make(op.batchId),
+            entryId: revert.entryId,
+            set: revert.set,
+            prev,
+          },
+        });
+      } else if (revert.type === "stackPreferences.updated") {
+        const preferences = folded.stackPreferences.get("default");
+        if (!preferences) continue;
+        const prev = Object.fromEntries(
+          Object.keys(revert.set).map((key) => [key, preferences[key as keyof typeof preferences]]),
+        );
+        planned.push({
+          kind: "event",
+          event: {
+            v: 1,
+            type: "stackPreferences.updated",
+            id: generateEventId(),
+            at: ctx.nowIso,
+            by: ctx.actor,
+            batch: ctx.batchId,
+            undoes: BatchIdSchema.make(op.batchId),
+            set: revert.set,
+            prev,
+          },
+        });
+      } else if (revert.type === "task.updated") {
         const current = tasks.find((task) => task.id === revert.taskId);
         if (!current) continue;
         const set = revert.set as Record<string, unknown>;
@@ -565,7 +675,9 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
   }
 
   const events = planned
-    .filter((item): item is { readonly kind: "event"; readonly event: Event } => item.kind === "event")
+    .filter(
+      (item): item is { readonly kind: "event"; readonly event: Event } => item.kind === "event",
+    )
     .map((item) => item.event);
 
   if (events.length === 0) {
@@ -579,6 +691,8 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
   if (ctx.mutations) {
     const commands: BatchCommand[] = events.map((event) => {
       switch (event.type) {
+        case "review.updated":
+          return { type: "review.restore", id: event.itemId, set: event.set };
         case "task.created":
           return {
             type: "task.create",
@@ -633,6 +747,20 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
             type: "chat.update",
             input: { chatId: event.chatId, ...event.set },
           };
+        case "dayEntry.updated":
+          return { type: "day.update", entryId: event.entryId, set: event.set };
+        case "stackPreferences.updated":
+          return { type: "preferences.update", set: event.set };
+        case "stackTemplate.saved":
+          return { type: "template.save", template: event.template };
+        case "workInterval.updated":
+          if (event.set.correctedSeconds === undefined)
+            throw new Error("Only explicit time corrections can be reversed");
+          return {
+            type: "player.correct",
+            intervalId: event.intervalId,
+            seconds: event.set.correctedSeconds,
+          };
         default:
           throw new Error(`Unsupported apply_changes event: ${event.type}`);
       }
@@ -655,9 +783,7 @@ export const applyChanges = Effect.fn("AgentTools.applyChanges")(function* (
   const push = yield* EventStore.pushEvents(events, ctx.nowIso);
   if (!push.ok) {
     return fail(
-      push.reject._tag === "clock_skew"
-        ? `clock_skew: ${push.reject.id}`
-        : push.reject.reason,
+      push.reject._tag === "clock_skew" ? `clock_skew: ${push.reject.id}` : push.reject.reason,
     );
   }
 
@@ -687,9 +813,31 @@ export const writePage = Effect.fn("AgentTools.writePage")(function* (
   if (ctx.mutations) {
     const pageId = input.pageId ?? PageIdSchema.make(generateShortId("pg_"));
     const committed = yield* ctx.mutations.executeBatch({
-      commands: [input.pageId
-        ? { type: "page.update", input: { pageId, title: input.title, body: input.body, pinned: input.pinned, reason: input.reason } }
-        : { type: "page.create", pageId, input: { projectId: input.projectId, kind: input.kind, title: input.title, body: input.body, pinned: input.pinned, reason: input.reason } }],
+      commands: [
+        input.pageId
+          ? {
+              type: "page.update",
+              input: {
+                pageId,
+                title: input.title,
+                body: input.body,
+                pinned: input.pinned,
+                reason: input.reason,
+              },
+            }
+          : {
+              type: "page.create",
+              pageId,
+              input: {
+                projectId: input.projectId,
+                kind: input.kind,
+                title: input.title,
+                body: input.body,
+                pinned: input.pinned,
+                reason: input.reason,
+              },
+            },
+      ],
       actor: ctx.actor,
       batchId: ctx.batchId,
       now: ctx.nowIso,
@@ -777,9 +925,7 @@ export const writePage = Effect.fn("AgentTools.writePage")(function* (
   const push = yield* EventStore.pushEvents(events, ctx.nowIso);
   if (!push.ok) {
     return fail(
-      push.reject._tag === "clock_skew"
-        ? `clock_skew: ${push.reject.id}`
-        : push.reject.reason,
+      push.reject._tag === "clock_skew" ? `clock_skew: ${push.reject.id}` : push.reject.reason,
     );
   }
   return { page, events: attachAssignedSeqs(events, push.result) } satisfies WritePageSuccess;

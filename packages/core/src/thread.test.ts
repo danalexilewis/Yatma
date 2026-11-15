@@ -6,6 +6,12 @@ import { foldEvents, parseEventLine } from "./fold.ts";
 import { ChatId, DeviceId, EventId, TaskId } from "./ids.ts";
 import type { Event } from "./events.ts";
 import {
+  assistantMessageId,
+  pageThreadMessages,
+  reconcileThreadMessages,
+  selectThreadMessages,
+  threadMessageKey,
+  type ThreadMessage,
   groupThreadTasks,
   PERSONAL_THREAD_ID,
   selectThreadHeadings,
@@ -193,5 +199,84 @@ describe("permanent task thread", () => {
     ]);
     expect(selectThreadHistory(state)).toHaveLength(1);
     expect(state.chats.get(PERSONAL_THREAD_ID)?.messages[0]?.text).toBe("Keep this message");
+  });
+});
+
+function messageFixture(index: number, chatId = PERSONAL_THREAD_ID): ThreadMessage {
+  return {
+    chatId,
+    message: {
+      id: `message-${String(index).padStart(4, "0")}`,
+      at: "2026-11-10T12:00:00.000Z",
+      role: "assistant",
+      text: "The same reply",
+    },
+  };
+}
+
+describe("bounded conversation messages", () => {
+  it("keeps equal-text messages and orders equal timestamps by chat then message identity", () => {
+    const otherChat = ChatId.make("c_AAAAAAA2");
+    const messages = reconcileThreadMessages([
+      messageFixture(2, otherChat),
+      messageFixture(3),
+      messageFixture(1),
+    ]);
+    expect(messages.map(threadMessageKey)).toEqual([
+      threadMessageKey(messageFixture(1)),
+      threadMessageKey(messageFixture(3)),
+      threadMessageKey(messageFixture(2, otherChat)),
+    ]);
+    expect(messages).toHaveLength(3);
+  });
+
+  it("pages 50 at a time, caps retention at 150, and keeps the visible message", () => {
+    const messages = Array.from({ length: 400 }, (_, index) => messageFixture(index));
+    let window = pageThreadMessages(messages, [], "latest");
+    expect(window.messages).toEqual(messages.slice(350));
+    expect(window.hasNewer).toBe(false);
+    for (let index = 0; index < 6; index++) {
+      const anchor = threadMessageKey(window.messages[0]!);
+      window = pageThreadMessages(messages, window.messages, "older", anchor);
+      expect(window.messages.length).toBeLessThanOrEqual(150);
+      expect(window.messages.some((entry) => threadMessageKey(entry) === anchor)).toBe(true);
+    }
+    expect(window.messages).toEqual(messages.slice(50, 200));
+    window = pageThreadMessages(
+      messages,
+      window.messages,
+      "newer",
+      threadMessageKey(window.messages.at(-1)!),
+    );
+    expect(window.messages).toEqual(messages.slice(100, 250));
+  });
+
+  it("reconciles streamed replies by identity even when another reply has identical text", () => {
+    const stream = {
+      ...messageFixture(1),
+      message: { ...messageFixture(1).message, id: assistantMessageId("turn-1") },
+    };
+    const older = messageFixture(2);
+    expect(reconcileThreadMessages([older], stream)).toHaveLength(2);
+    const durable = { ...stream, message: { ...stream.message, text: "Full durable reply" } };
+    expect(reconcileThreadMessages([older, durable], stream)).toEqual([older, durable]);
+  });
+
+  it("reads persisted legacy chats without synthesizing completion rows", () => {
+    const chatId = ChatId.make("c_AAAAAAA1");
+    const state = foldEvents([
+      created(),
+      { ...envelope(2), type: "chat.created", chatId, projectId: null },
+      {
+        ...envelope(3),
+        type: "chat.message",
+        chatId,
+        messageId: "legacy",
+        role: "system",
+        text: "Keep this reply",
+      },
+      { ...envelope(4), type: "task.updated", taskId, set: { status: "done" } },
+    ]);
+    expect(selectThreadMessages(state).map((entry) => entry.message.id)).toEqual(["legacy"]);
   });
 });

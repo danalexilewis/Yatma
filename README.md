@@ -26,6 +26,8 @@ development; tasks are stored locally without a Worker or cloud database.
 ```bash
 pnpm test
 pnpm -r typecheck
+pnpm check:boundaries
+pnpm check:specs
 ```
 
 - Mobile/native: `pnpm dev`. For signed-in sync, copy `apps/mobile/.env.example`
@@ -68,3 +70,16 @@ remaining integration work and acceptance gates. Read the
 The Worker serves health, sync push, and unary turn operations through shared
 never-rest contracts. Live sync and turn observation use WebSocket streams.
 The delivery plan tracks implementation and acceptance evidence separately.
+
+The [next-build ledger](docs/plans/next-build.md#execution-ledger--2026-11-10)
+records the local Chat/Today/player implementation, browser checks and remaining
+device/backend gates. `pnpm profile:next-build` reports separate journal/fold and
+bounded-presentation measurements. Original ambient loops are bundled locally;
+`python3 scripts/generate-ambient-audio.py` regenerates them. Version 0.2.0 adds
+the native notification module, so rebuild native development clients when updating.
+
+Current local product direction: Conversation is the planning/query layer (`/list`
+and task/project mentions); Today is the selected work stack. Focus is one surface:
+desktop splits controls/queue and ambience, while mobile shows full-screen ambience
+with bottom controls and the stack below. See the [refinement ledger](docs/plans/next-build.md#product-refinements--2026-11-11)
+for implemented behavior, checks, and pending external acceptance.

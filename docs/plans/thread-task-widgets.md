@@ -1,7 +1,8 @@
 # Task widgets in the conversation
 
-Planning date: 2026-11-10. Status: proposed implementation; documentation review
-only. Extends the [private-alpha plan](private-alpha.md) and supersedes its
+Planning date: 2026-11-10. Status: implemented locally; browser and focused-test
+evidence is in the [next-build ledger](next-build.md#execution-ledger--2026-11-10).
+Native acceptance remains unverified. Extends the [private-alpha plan](private-alpha.md) and supersedes its
 collapsing priority-list presentation. Existing storage, sync, turn, and native
 acceptance gates still apply.
 
@@ -40,7 +41,7 @@ Success: render the same task in five replies; complete it in the first, reopen
 it in the fourth, reload, and page away/back. Every copy must agree at each step.
 Task title opens details over the thread; details link to the associated project.
 
-## Current implementation and evidence
+## Baseline implementation and evidence before this build
 
 - [ChatDetailScreen](../../apps/mobile/src/features/chat/ChatDetailScreen.tsx)
   owns collapse, sticky-summary, and return-to-priority state.

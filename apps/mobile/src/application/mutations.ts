@@ -85,12 +85,7 @@ export function createLocalMutationWriter(deps: LocalMutationWriterDeps) {
       const snapshot = await readCurrentSnapshot(deps, generation);
       const undo = planUndo(
         batchEvents,
-        {
-          projects: snapshot.folded.projects,
-          tasks: snapshot.folded.tasks,
-          pages: snapshot.folded.pages,
-          chats: snapshot.folded.chats,
-        },
+        snapshot.folded,
         latestWritesFromEvents(snapshot.folded.events),
       );
       const commands = undo.reverts.map((revert) =>
@@ -119,7 +114,7 @@ export function createLocalMutationWriter(deps: LocalMutationWriterDeps) {
 }
 
 function withUndoReason(command: BatchCommand, reason: string): BatchCommand {
-  if (command.type === "chat.message") return command;
+  if (!("input" in command)) return command;
   return { ...command, input: { ...command.input, reason: reason.trim() } } as BatchCommand;
 }
 
@@ -147,7 +142,8 @@ async function executeFromSnapshot(
   actor: Actor,
   context?: { readonly batchId?: BatchId; readonly undoes?: BatchId },
 ): Promise<LocalMutationResult> {
-  const planned = planBatch(snapshot.folded, commands, { actor, ...context });
+  const now = (deps.now ?? (() => new Date().toISOString()))();
+  const planned = planBatch(snapshot.folded, commands, { actor, ...context, now });
   if (Result.isFailure(planned)) {
     throw mutationFailure("planning_failed", planned.failure.message, planned.failure);
   }
@@ -156,7 +152,7 @@ async function executeFromSnapshot(
   }
   const stamped = stampBatch(planned.success.drafts, {
     observedMaxAt: lastSeenAtFromEvents(snapshot.folded.events),
-    now: (deps.now ?? (() => new Date().toISOString()))(),
+    now,
     eventIds: planned.success.drafts.map(() => generateEventId()),
   });
   if (Result.isFailure(stamped)) {
@@ -177,6 +173,20 @@ async function executeFromSnapshot(
 
 function commandFromRevert(revert: UndoRevert): BatchCommand {
   switch (revert.type) {
+    case "review.updated":
+      return { type: "review.restore", id: revert.itemId, set: revert.set };
+    case "dayEntry.updated":
+      return { type: "day.update", entryId: revert.entryId, set: revert.set };
+    case "stackPreferences.updated":
+      return { type: "preferences.update", set: revert.set };
+    case "stackTemplate.saved":
+      return { type: "template.save", template: revert.template };
+    case "workInterval.updated":
+      return {
+        type: "player.correct",
+        intervalId: revert.intervalId,
+        seconds: revert.set.correctedSeconds,
+      };
     case "task.updated":
       return { type: "task.update", input: { taskId: revert.taskId, ...revert.set } };
     case "project.updated":

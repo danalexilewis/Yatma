@@ -15,7 +15,17 @@ import * as SqlClient from "effect/sql/SqlClient";
 
 const decodeEvent = Schema.decodeUnknownOption(EventSchema);
 
-export type EntityKind = "project" | "task" | "page" | "chat";
+export type EntityKind =
+  | "project"
+  | "task"
+  | "page"
+  | "chat"
+  | "day"
+  | "dayEntry"
+  | "workInterval"
+  | "stackTemplate"
+  | "stackPreferences"
+  | "review";
 
 export type StoredEvent = Event & { readonly seq: number };
 
@@ -70,15 +80,46 @@ export function entityIdOf(event: Event): string {
     case "chat.message":
     case "chat.updated":
       return event.chatId;
+    case "day.created":
+      return event.day.id;
+    case "day.updated":
+      return event.dayId;
+    case "dayEntry.created":
+      return event.entry.id;
+    case "dayEntry.updated":
+      return event.entryId;
+    case "workInterval.created":
+      return event.interval.id;
+    case "workInterval.updated":
+      return event.intervalId;
+    case "stackTemplate.saved":
+      return event.template.id;
+    case "stackPreferences.updated":
+      return "default";
+    case "review.received":
+      return event.item.id;
+    case "review.updated":
+      return event.itemId;
   }
 }
 
 export function kindOf(event: Event): EntityKind {
   const kind = event.type.split(".")[0];
-  if (kind === "project" || kind === "task" || kind === "page" || kind === "chat") {
+  if (
+    kind === "project" ||
+    kind === "task" ||
+    kind === "page" ||
+    kind === "chat" ||
+    kind === "day" ||
+    kind === "dayEntry" ||
+    kind === "workInterval" ||
+    kind === "stackTemplate" ||
+    kind === "stackPreferences" ||
+    kind === "review"
+  ) {
     return kind;
   }
-  return "task";
+  throw new Error(`Unsupported entity kind: ${kind}`);
 }
 
 export function parseWireEvent(raw: unknown): Event | null {
@@ -118,15 +159,15 @@ interface EntityRow {
   readonly state: string;
 }
 
-function rowToStored(row: EventRow): StoredEvent | null {
+function rowToStored(row: EventRow): StoredEvent {
   let raw: unknown;
   try {
     raw = JSON.parse(row.payload);
   } catch {
-    return null;
+    throw new Error(`Unsupported or invalid stored event: ${row.id}`);
   }
   const event = parseWireEvent(raw);
-  if (!event) return null;
+  if (!event) throw new Error(`Unsupported or invalid stored event: ${row.id}`);
   return { ...event, seq: row.seq };
 }
 
@@ -254,7 +295,9 @@ const appendPreparedEvents = Effect.fn("EventStore.appendPreparedEvents")(functi
         }
       }
 
-      for (const entityId of touched) yield* refoldEntity(entityId);
+      // Terminal task events can resolve entries and intervals owned by another
+      // entity. Project the shared full fold once so those records stay atomic.
+      if (touched.size > 0) yield* refoldProjections;
 
       return {
         ok: true as const,
@@ -394,73 +437,50 @@ export const loadFolded = Effect.gen(function* () {
   return foldEvents(events);
 });
 
-const refoldEntity = (entityId: string) =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<EventRow>`
-      SELECT seq, id, entity_id, at, payload
-      FROM events
-      WHERE entity_id = ${entityId}
-      ORDER BY at ASC, id ASC
-    `;
-    const events: Event[] = [];
-    let kind: EntityKind = "task";
-    for (const row of rows) {
-      const stored = rowToStored(row);
-      if (!stored) continue;
-      events.push(stored);
-      kind = kindOf(stored);
-    }
-    if (events.length === 0) {
-      yield* sql`DELETE FROM entities WHERE id = ${entityId}`;
-      yield* sql`DELETE FROM search_fts WHERE entity_id = ${entityId}`;
-      return;
-    }
-    const folded = foldEvents(events);
-    const state = entityStateFromFold(entityId, kind, folded);
-    if (!state) {
-      yield* sql`DELETE FROM entities WHERE id = ${entityId}`;
-      return;
-    }
-    const json = JSON.stringify(state);
-    yield* sql`
-      INSERT INTO entities (id, kind, state)
-      VALUES (${entityId}, ${kind}, ${json})
-      ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, state = excluded.state
-    `;
-    const title =
-      typeof state === "object" &&
-      state !== null &&
-      "title" in state &&
-      typeof (state as { title: unknown }).title === "string"
-        ? (state as { title: string }).title
-        : entityId;
-    const body =
-      typeof state === "object" && state !== null
-        ? "body" in state && typeof (state as { body: unknown }).body === "string"
-          ? (state as { body: string }).body
-          : "notes" in state && typeof (state as { notes: unknown }).notes === "string"
-            ? (state as { notes: string }).notes
-            : "summary" in state && typeof (state as { summary: unknown }).summary === "string"
-              ? ((state as { summary: string | null }).summary ?? "")
-              : ""
-        : "";
-    yield* upsertFts({ entityId, kind, title, body });
-  });
+const refoldProjections = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const folded = yield* loadFolded;
+  const maps = [
+    ["project", folded.projects],
+    ["task", folded.tasks],
+    ["page", folded.pages],
+    ["chat", folded.chats],
+    ["day", folded.days],
+    ["dayEntry", folded.dayEntries],
+    ["workInterval", folded.workIntervals],
+    ["stackTemplate", folded.stackTemplates],
+    ["stackPreferences", folded.stackPreferences],
+    ["review", folded.reviewItems],
+  ] as const;
 
-function entityStateFromFold(
-  entityId: string,
-  kind: EntityKind,
-  folded: ReturnType<typeof foldEvents>,
-): unknown | null {
-  switch (kind) {
-    case "project":
-      return folded.projects.get(entityId as never) ?? null;
-    case "task":
-      return folded.tasks.get(entityId as never) ?? null;
-    case "page":
-      return folded.pages.get(entityId as never) ?? null;
-    case "chat":
-      return folded.chats.get(entityId as never) ?? null;
+  for (const [kind, entities] of maps) {
+    for (const [entityId, state] of entities) {
+      const json = JSON.stringify(state);
+      yield* sql`
+        INSERT INTO entities (id, kind, state)
+        VALUES (${entityId}, ${kind}, ${json})
+        ON CONFLICT (id) DO UPDATE SET kind = excluded.kind, state = excluded.state
+      `;
+      // Time history and player preferences are not searchable backlog items.
+      if (
+        kind === "day" ||
+        kind === "dayEntry" ||
+        kind === "workInterval" ||
+        kind === "stackTemplate" ||
+        kind === "stackPreferences" ||
+        kind === "review"
+      )
+        continue;
+      const title = "title" in state && typeof state.title === "string" ? state.title : entityId;
+      const body =
+        "body" in state && typeof state.body === "string"
+          ? state.body
+          : "notes" in state && typeof state.notes === "string"
+            ? state.notes
+            : "summary" in state && typeof state.summary === "string"
+              ? state.summary
+              : "";
+      yield* upsertFts({ entityId, kind, title, body });
+    }
   }
-}
+});

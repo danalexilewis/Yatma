@@ -1,8 +1,9 @@
-import { buildContext, contextText, ProjectId } from "@yatma/core";
+import { buildContext, contextText, ProjectId, selectDayEntries } from "@yatma/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 
-import { ProjectTaskList, type ProjectTaskFilter } from "./ProjectTaskList";
+import { TasksScreen } from "../tasks/TasksScreen";
+import { useStackPlayer } from "../player/PlayerProvider";
 import { useFoldedState } from "../../state/atoms";
 import { selectPages, selectProject } from "../../state/selectors";
 import { useTheme } from "../../theme/theme";
@@ -17,17 +18,11 @@ function useProject() {
 
 export function ProjectTasksScreen() {
   const { id, project } = useProject();
-  const { filter } = useLocalSearchParams<{ filter?: ProjectTaskFilter }>();
+  const { filter } = useLocalSearchParams<{ filter?: string }>();
+  const due =
+    filter === "overdue" || filter === "upcoming" || filter === "undated" ? filter : "all";
   if (!project || !id) return <MissingProject />;
-  return (
-    <Screen edges={[]}>
-      <ProjectTaskList
-        key={`${id}:${filter ?? "all"}`}
-        projectId={ProjectId.make(id)}
-        initialFilter={filter ?? "all"}
-      />
-    </Screen>
-  );
+  return <TasksScreen key={`${id}:${due}`} projectId={ProjectId.make(id)} initialDue={due} />;
 }
 
 export function ProjectHandbookScreen() {
@@ -61,6 +56,7 @@ export function ProjectHandbookScreen() {
 export function ProjectContextScreen() {
   const router = useRouter();
   const theme = useTheme();
+  const player = useStackPlayer();
   const { id, folded, project } = useProject();
   const briefs = selectPages(folded, id).filter((page) => page.kind === "brief");
   const pinned = selectPages(folded, id).filter((page) => page.pinned);
@@ -68,7 +64,12 @@ export function ProjectContextScreen() {
   if (!project || !id) return <MissingProject />;
 
   const built = buildContext({
-    today: new Date().toISOString().slice(0, 10),
+    today: player.date,
+    planning: {
+      date: player.date,
+      timezone: player.timezone,
+      entries: selectDayEntries(folded.dayEntries, player.dayId, true),
+    },
     projects: folded.projects,
     tasks: folded.tasks,
     pages: folded.pages,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { classifyRefPlacement, extractRefs, parseRefHref } from "./refs.ts";
+import { classifyRefPlacement, extractRefs, formatRef, parseRefHref } from "./refs.ts";
 
 const taskId = "t_KG2CPWC0";
 const pageId = "pg_A4T776XZ";
@@ -8,6 +8,15 @@ const chatId = "c_ZZTRJ9X9";
 const taskIdB = "t_BCDEFGHJ";
 
 describe("parseRefHref", () => {
+  it("retains typed project identity and escaped labels", () => {
+    const link = formatRef("project", "p_ABCDEFGH", "Home [garden] \\ planning");
+    expect(extractRefs(link)).toEqual([
+      { kind: "project", id: "p_ABCDEFGH", label: "Home [garden] \\ planning" },
+    ]);
+    expect(parseRefHref("project:t_ABCDEFGH").ok).toBe(false);
+    expect(parseRefHref("project:p_bad").ok).toBe(false);
+    expect(classifyRefPlacement(link, 0)).toBe("chip");
+  });
   it("parses task, page, and chat refs", () => {
     expect(parseRefHref(`task:${taskId}`, "A")).toEqual({
       ok: true,

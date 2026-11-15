@@ -1,6 +1,8 @@
 # Daily stack and task player
 
-Planning date: 2026-11-10. Status: proposed; no implementation or device acceptance.
+Planning date: 2026-11-10. Status: implemented locally; local tests and browser
+evidence are in the [next-build ledger](next-build.md#execution-ledger--2026-11-10).
+Native, Cloudflare and connected-device acceptance remain unverified.
 Extends the [private-alpha plan](private-alpha.md) and
 [thread-widget plan](thread-task-widgets.md). Acceptance model:
 [Gurki daily-stack specs](../specs/daily-stack-player.spec.md).

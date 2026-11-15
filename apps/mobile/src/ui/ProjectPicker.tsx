@@ -6,7 +6,7 @@ import { useTheme } from "../theme/theme";
 /** Single project assignment shared by capture and task editing. */
 export function ProjectPicker(props: {
   readonly projects: readonly Project[];
-  readonly value: ProjectId | null;
+  readonly value: ProjectId | null | undefined;
   readonly onChange: (projectId: ProjectId | null) => void;
   readonly disabled?: boolean;
 }) {

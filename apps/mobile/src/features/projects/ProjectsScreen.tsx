@@ -17,16 +17,11 @@ export function ProjectsScreen() {
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [showRecovery, setShowRecovery] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
   const visibleProjects = [...folded.projects.values()]
     .filter((project) => (project.archivedAt !== null) === showArchived)
     .toSorted((a, b) => a.title.localeCompare(b.title));
-  const recoveryTasks = [...folded.tasks.values()]
-    .filter((task) => task.deletedAt !== null || task.status === "done")
-    .toSorted((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
-
   async function runCommand(command: Parameters<typeof store.executeLocalCommands>[0][number]) {
     try {
       await store.executeLocalCommands([command]);
@@ -55,7 +50,7 @@ export function ProjectsScreen() {
   return (
     <Screen>
       <ScreenHeader
-        title={showRecovery ? "Completed & deleted" : "Projects"}
+        title="Projects"
         trailing={
           <IconButton
             name={creating ? "close" : "add"}
@@ -67,21 +62,12 @@ export function ProjectsScreen() {
       />
 
       <View style={styles.filters}>
-        <Pressable onPress={() => setShowRecovery(false)}>
-          <Text style={{ color: !showRecovery ? theme.colors.pine : theme.colors.muted }}>
-            Projects
-          </Text>
+        <Text style={{ color: theme.colors.muted, flex: 1 }}>
+          Organise sets of tasks. Tasks can also stand alone.
+        </Text>
+        <Pressable accessibilityRole="button" onPress={() => setShowArchived((value) => !value)}>
+          <Text style={{ color: theme.colors.pine }}>{showArchived ? "Archived" : "Active"}</Text>
         </Pressable>
-        <Pressable onPress={() => setShowRecovery(true)}>
-          <Text style={{ color: showRecovery ? theme.colors.pine : theme.colors.muted }}>
-            Completed & deleted
-          </Text>
-        </Pressable>
-        {!showRecovery ? (
-          <Pressable onPress={() => setShowArchived((value) => !value)}>
-            <Text style={{ color: theme.colors.pine }}>{showArchived ? "Archived" : "Active"}</Text>
-          </Pressable>
-        ) : null}
       </View>
 
       {creating ? (
@@ -119,21 +105,7 @@ export function ProjectsScreen() {
       ) : null}
 
       <ScrollView style={styles.list} keyboardShouldPersistTaps="handled">
-        {showRecovery ? (
-          recoveryTasks.length === 0 ? (
-            <EmptyState message="No completed or deleted tasks." />
-          ) : (
-            recoveryTasks.map((task, index) => (
-              <Row
-                key={task.id}
-                title={task.title}
-                subtitle={task.deletedAt ? "Deleted" : "Completed"}
-                last={index === recoveryTasks.length - 1}
-                onPress={() => router.push(`/task/${task.id}`)}
-              />
-            ))
-          )
-        ) : visibleProjects.length === 0 ? (
+        {visibleProjects.length === 0 ? (
           <EmptyState
             message={showArchived ? "No archived projects." : "No projects yet."}
             actionLabel="New project"
@@ -188,7 +160,7 @@ export function ProjectsScreen() {
                         ]}
                       />
                     }
-                    onPress={() => router.push(`/project/${project.id}/overview`)}
+                    onPress={() => router.push(`/project/${project.id}/tasks`)}
                     trailing={
                       <View style={styles.actions}>
                         <Pressable

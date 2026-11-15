@@ -1,3 +1,13 @@
+import {
+  ReviewSchedule,
+  GmailCompleteInput,
+  GmailImportInput,
+  GmailStatus,
+  GmailConnection,
+  GmailBeginOutput,
+  GmailImportOutput,
+  GmailDisconnectOutput,
+} from "./connectionSchemas.ts";
 // Copyright (c) T3 Tools / MIT — adapted for Yatma
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
@@ -5,10 +15,26 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 
 import { ChatId, DeviceId, EventId, ProjectId } from "./ids.ts";
 import { Event } from "./events.ts";
-import { Title } from "./schemas.ts";
+import { CalendarDate, Title } from "./schemas.ts";
+import { StackTimezone } from "./stackSchemas.ts";
 
 export const Seq = Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0));
 export type Seq = typeof Seq.Type;
+
+/** Reader capability for additive day/player records; independent of event envelope v. */
+export const SYNC_EVENT_SCHEMA_VERSION = 5;
+export const SyncReaderVersion = Schema.optional(
+  Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(1)),
+);
+/** URL query representation of the reader capability for GET event results. */
+export const EventReaderQuery = Schema.Struct({
+  eventSchemaVersion: Schema.optional(Schema.String),
+});
+
+/** Legacy clients must upgrade before reading or writing the extended event stream. */
+export function supportsSyncEvents(version: number | undefined): boolean {
+  return version !== undefined && Number.isInteger(version) && version >= SYNC_EVENT_SCHEMA_VERSION;
+}
 
 export class BudgetExceeded extends Schema.TaggedError<BudgetExceeded>()("BudgetExceeded", {
   used: Schema.Number,
@@ -54,6 +80,7 @@ export type SyncBatch = typeof SyncBatch.Type;
 export const SyncPushInput = Schema.Struct({
   events: Schema.Array(Event),
   deviceId: DeviceId,
+  eventSchemaVersion: SyncReaderVersion,
 });
 export type SyncPushInput = typeof SyncPushInput.Type;
 
@@ -69,6 +96,7 @@ export const SyncPushResult = Schema.Struct({
 export type SyncPushResult = typeof SyncPushResult.Type;
 
 export const ChatSendInput = Schema.Struct({
+  eventSchemaVersion: SyncReaderVersion,
   chatId: Schema.optional(ChatId),
   projectId: Schema.NullOr(ProjectId),
   text: Schema.String,
@@ -132,17 +160,25 @@ export const TurnReceipt = Schema.Struct({
 export type TurnReceipt = typeof TurnReceipt.Type;
 
 /** Client identity makes retries safe without conflating repeated message text. */
+export const PlanningContext = Schema.Struct({ date: CalendarDate, timezone: StackTimezone });
+export type PlanningContext = typeof PlanningContext.Type;
+
 export const TurnStartInput = Schema.Struct({
+  eventSchemaVersion: SyncReaderVersion,
   requestId: Schema.String,
   messageId: Schema.String,
   chatId: Schema.optional(ChatId),
   projectId: Schema.NullOr(ProjectId),
   text: Schema.String,
+  planning: Schema.optional(PlanningContext),
   events: Schema.Array(Event),
 });
 export type TurnStartInput = typeof TurnStartInput.Type;
 
-export const TurnGetInput = Schema.Struct({ turnId: Schema.String });
+export const TurnGetInput = Schema.Struct({
+  turnId: Schema.String,
+  eventSchemaVersion: SyncReaderVersion,
+});
 export type TurnGetInput = typeof TurnGetInput.Type;
 
 export const TurnGetResult = Schema.Struct({
@@ -165,11 +201,16 @@ export type TurnStopResult = typeof TurnStopResult.Type;
 export const TurnFrame = Schema.Struct({ seq: Seq, item: ChatStreamItem });
 export type TurnFrame = typeof TurnFrame.Type;
 
-export const TurnObserveInput = Schema.Struct({ turnId: Schema.String, after: Seq });
+export const TurnObserveInput = Schema.Struct({
+  turnId: Schema.String,
+  after: Seq,
+  eventSchemaVersion: SyncReaderVersion,
+});
 export type TurnObserveInput = typeof TurnObserveInput.Type;
 
 export const ChatWrapUpInput = Schema.Struct({
   chatId: ChatId,
+  eventSchemaVersion: SyncReaderVersion,
 });
 export type ChatWrapUpInput = typeof ChatWrapUpInput.Type;
 
@@ -218,7 +259,7 @@ export const SyncPushRpc = Rpc.make("sync.push", {
 });
 
 export const SyncSubscribeRpc = Rpc.make("sync.subscribe", {
-  payload: Schema.Struct({ after: Seq }),
+  payload: Schema.Struct({ after: Seq, eventSchemaVersion: SyncReaderVersion }),
   success: SyncBatch,
   error: SpaceError,
   stream: true,
@@ -285,7 +326,63 @@ export const AccountDeleteRpc = Rpc.make("account.delete", {
 });
 
 /** All UserSpace RPCs shared by the phone and the Worker. */
-export const SpaceRpcGroup = RpcGroup.make(
+export const ReviewScheduleGetRpc = Rpc.make("review.schedule.get", {
+  success: ReviewSchedule,
+  error: SpaceError,
+});
+export const ReviewScheduleSetRpc = Rpc.make("review.schedule.set", {
+  payload: ReviewSchedule,
+  success: ReviewSchedule,
+  error: SpaceError,
+});
+export const GmailStatusRpc = Rpc.make("gmail.status", { success: GmailStatus, error: SpaceError });
+export const GmailBeginRpc = Rpc.make("gmail.begin", {
+  success: GmailBeginOutput,
+  error: SpaceError,
+});
+export const GmailCompleteRpc = Rpc.make("gmail.complete", {
+  payload: GmailCompleteInput,
+  success: GmailConnection,
+  error: SpaceError,
+});
+export const GmailImportRpc = Rpc.make("gmail.import", {
+  payload: GmailImportInput,
+  success: GmailImportOutput,
+  error: SpaceError,
+});
+export const GmailDisconnectRpc = Rpc.make("gmail.disconnect", {
+  success: GmailDisconnectOutput,
+  error: SpaceError,
+});
+export type SpaceRpcs =
+  | typeof PingRpc
+  | typeof SyncPushRpc
+  | typeof SyncSubscribeRpc
+  | typeof ChatSendRpc
+  | typeof ChatStopRpc
+  | typeof TurnStartRpc
+  | typeof TurnGetRpc
+  | typeof TurnStopRpc
+  | typeof TurnObserveRpc
+  | typeof ChatWrapUpRpc
+  | typeof TranscribeRpc
+  | typeof UsageGetRpc
+  | typeof AccountDeleteRpc
+  | typeof ReviewScheduleGetRpc
+  | typeof ReviewScheduleSetRpc
+  | typeof GmailStatusRpc
+  | typeof GmailBeginRpc
+  | typeof GmailCompleteRpc
+  | typeof GmailImportRpc
+  | typeof GmailDisconnectRpc;
+export const SpaceRpcGroup: RpcGroup.RpcGroup<SpaceRpcs> = RpcGroup.make(
+  ReviewScheduleGetRpc,
+  ReviewScheduleSetRpc,
+  GmailStatusRpc,
+  GmailBeginRpc,
+  GmailCompleteRpc,
+  GmailImportRpc,
+  GmailDisconnectRpc,
   PingRpc,
   SyncPushRpc,
   SyncSubscribeRpc,

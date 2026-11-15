@@ -2,41 +2,29 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { parseComposerInput } from "./composerInput";
 
-describe("thread composer commands", () => {
-  it("selects task/project capture from a message and leaves an empty command unsent", () => {
-    expect(parseComposerInput("/task Book the dentist", "message")).toEqual({
-      mode: "task",
-      text: "Book the dentist",
-      command: true,
-    });
-    expect(parseComposerInput("/heading Home", "message")).toEqual({
-      mode: "project",
-      text: "Home",
-      command: true,
-    });
-    expect(parseComposerInput("/project Home", "message")).toEqual({
-      mode: "project",
-      text: "Home",
-      command: true,
-    });
-    expect(parseComposerInput("/task", "message")).toEqual({
-      mode: "task",
-      text: "",
-      command: true,
-    });
+describe("conversation command boundaries", () => {
+  it("recognizes only the complete list command with surrounding whitespace", () => {
+    for (const value of ["/list", "/LIST", "  /list  ", "\n/list\n"]) {
+      expect(parseComposerInput(value)).toEqual({ kind: "list" });
+    }
   });
 
-  it("keeps ordinary slash text and respects dropdown selection", () => {
-    expect(parseComposerInput("Review /tasks endpoint", "task")).toEqual({
-      mode: "task",
-      text: "Review /tasks endpoint",
-      command: false,
-    });
-    expect(parseComposerInput("/tasks", "message")).toEqual({
-      mode: "message",
-      text: "/tasks",
-      command: false,
-    });
-    expect(parseComposerInput("/message Hello", "task").mode).toBe("message");
+  it("keeps command-looking prose and former capture modes as ordinary LLM messages", () => {
+    for (const text of [
+      "/lists",
+      "/list today",
+      "Show /list here",
+      "/list\nthen prioritize",
+      "/message Hello",
+      "/task Dentist",
+      "/project Home",
+      "/heading Work",
+      "/list?",
+      "https://example.test/list",
+    ]) {
+      expect(parseComposerInput(text)).toEqual({ kind: "message", text });
+    }
+    expect(parseComposerInput("  Plan my day  ")).toEqual({ kind: "message", text: "Plan my day" });
+    expect(parseComposerInput("   ")).toEqual({ kind: "message", text: "" });
   });
 });

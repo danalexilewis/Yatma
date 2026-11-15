@@ -1,3 +1,5 @@
+import { createGmailApi, type GmailApiContext } from "./http/gmail.ts";
+import { createReviewApi, type ReviewApiContext } from "./http/review.ts";
 // Copyright (c) T3 Tools / MIT — adapted for Yatma
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
@@ -40,6 +42,13 @@ export const ApiLive = Api.make(
       Config.withDefault(500_000),
     );
 
+    const gmailClientId = Option.getOrNull(yield* Config.option(Config.String("GMAIL_CLIENT_ID")));
+    const gmailClientSecret = optionalRedacted(
+      yield* Config.option(Config.Redacted("GMAIL_CLIENT_SECRET")),
+    );
+    const gmailRedirectUri = Option.getOrNull(
+      yield* Config.option(Config.String("GMAIL_REDIRECT_URI")),
+    );
     return {
       main: import.meta.filename,
       compatibility: {
@@ -48,6 +57,9 @@ export const ApiLive = Api.make(
       },
       env: {
         STAGE: stage,
+        GMAIL_CLIENT_ID: gmailClientId ?? "",
+        GMAIL_CLIENT_SECRET: gmailClientSecret ?? "",
+        GMAIL_REDIRECT_URI: gmailRedirectUri ?? "",
         CLERK_SECRET_KEY: clerkSecretKey ?? "",
         CLERK_PUBLISHABLE_KEY: clerkPublishableKey ?? "",
         CLERK_JWT_AUDIENCE: clerkJwtAudience ?? "yatma",
@@ -86,43 +98,100 @@ export const ApiLive = Api.make(
           }
         }
 
-        const isUserApiRoute = url.pathname.startsWith("/api/sync/") || url.pathname.startsWith("/api/turns");
+        if (url.pathname.startsWith("/api/review/") || url.pathname.startsWith("/api/gmail/")) {
+          const verified = yield* verifyClerkRequest(authConfig, raw).pipe(Effect.option);
+          if (Option.isNone(verified))
+            return HttpServerResponse.text("Unauthorized", { status: 401 });
+          const { userId } = verified.value;
+          const client = yield* userSpaces.getByName(userId);
+          function owned(id: string) {
+            if (id !== userId) throw new Error("principal mismatch");
+          }
+          const context: GmailApiContext & ReviewApiContext = {
+            readReviewSchedule: async (id) => {
+              owned(id);
+              return Effect.runPromise(client["review.schedule.get"]());
+            },
+            saveReviewSchedule: async (id, input) => {
+              owned(id);
+              return Effect.runPromise(client["review.schedule.set"](input));
+            },
+            gmailStatus: async (id) => {
+              owned(id);
+              return Effect.runPromise(client["gmail.status"]());
+            },
+            beginGmail: async (id) => {
+              owned(id);
+              return Effect.runPromise(client["gmail.begin"]());
+            },
+            completeGmail: async (id, input) => {
+              owned(id);
+              return Effect.runPromise(client["gmail.complete"](input));
+            },
+            importGmail: async (id, input) => {
+              owned(id);
+              return Effect.runPromise(client["gmail.import"](input));
+            },
+            disconnectGmail: async (id) => {
+              owned(id);
+              return Effect.runPromise(client["gmail.disconnect"]());
+            },
+          };
+          const api = url.pathname.startsWith("/api/review/")
+            ? createReviewApi({ userId })
+            : createGmailApi({ userId });
+          const result = yield* Effect.promise(() => api.handle(raw, context));
+          return result.matched
+            ? HttpServerResponse.fromWeb(result.response)
+            : HttpServerResponse.text("Not found", { status: 404 });
+        }
+
+        const isUserApiRoute =
+          url.pathname.startsWith("/api/sync/") || url.pathname.startsWith("/api/turns");
         if (isUserApiRoute) {
           const verified = yield* verifyClerkRequest(authConfig, raw).pipe(
             Effect.mapError(() => undefined),
             Effect.option,
           );
           const fallbackContext: UserApiContext = {
-            pushEvents: async () => { throw new Error("unavailable"); },
-            startTurn: async () => { throw new Error("unavailable"); },
-            getTurn: async () => { throw new Error("unavailable"); },
-            stopTurn: async () => { throw new Error("unavailable"); },
+            pushEvents: async () => {
+              throw new Error("unavailable");
+            },
+            startTurn: async () => {
+              throw new Error("unavailable");
+            },
+            getTurn: async () => {
+              throw new Error("unavailable");
+            },
+            stopTurn: async () => {
+              throw new Error("unavailable");
+            },
           };
           if (Option.isNone(verified)) {
-            const response = yield* Effect.promise(() =>
-              createUserApi(null)(raw, fallbackContext),
-            );
+            const response = yield* Effect.promise(() => createUserApi(null)(raw, fallbackContext));
             return HttpServerResponse.fromWeb(response);
           }
           const { userId } = verified.value;
           const client = yield* userSpaces.getByName(userId);
           const context: UserApiContext = {
-            pushEvents: (targetUserId, input) => targetUserId === userId
-              ? Effect.runPromise(client["sync.push"](input))
-              : Promise.reject(new Error("principal mismatch")),
-            startTurn: (targetUserId, input) => targetUserId === userId
-              ? Effect.runPromise(client["turn.start"](input))
-              : Promise.reject(new Error("principal mismatch")),
-            getTurn: (targetUserId, turnId) => targetUserId === userId
-              ? Effect.runPromise(client["turn.get"]({ turnId }))
-              : Promise.reject(new Error("principal mismatch")),
-            stopTurn: (targetUserId, input) => targetUserId === userId
-              ? Effect.runPromise(client["turn.stop"](input))
-              : Promise.reject(new Error("principal mismatch")),
+            pushEvents: (targetUserId, input) =>
+              targetUserId === userId
+                ? Effect.runPromise(client["sync.push"](input))
+                : Promise.reject(new Error("principal mismatch")),
+            startTurn: (targetUserId, input) =>
+              targetUserId === userId
+                ? Effect.runPromise(client["turn.start"](input))
+                : Promise.reject(new Error("principal mismatch")),
+            getTurn: (targetUserId, turnId, eventSchemaVersion) =>
+              targetUserId === userId
+                ? Effect.runPromise(client["turn.get"]({ turnId, eventSchemaVersion }))
+                : Promise.reject(new Error("principal mismatch")),
+            stopTurn: (targetUserId, input) =>
+              targetUserId === userId
+                ? Effect.runPromise(client["turn.stop"](input))
+                : Promise.reject(new Error("principal mismatch")),
           };
-          const response = yield* Effect.promise(() =>
-            createUserApi({ userId })(raw, context),
-          );
+          const response = yield* Effect.promise(() => createUserApi({ userId })(raw, context));
           return HttpServerResponse.fromWeb(response);
         }
 

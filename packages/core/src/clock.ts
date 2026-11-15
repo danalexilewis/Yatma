@@ -7,7 +7,8 @@ export const DAY_MS = 86_400_000;
  * `at = max(now, lastSeenAt + 1ms)`.
  */
 export function nextAt(lastSeenAt: string | null | undefined, now: string): string {
-  if (lastSeenAt == null || lastSeenAt === "") return now;
+  if (lastSeenAt == null || lastSeenAt === "")
+    return Number.isFinite(Date.parse(now)) ? new Date(now).toISOString() : now;
   const lastMs = Date.parse(lastSeenAt);
   const nowMs = Date.parse(now);
   if (!Number.isFinite(lastMs)) return now;

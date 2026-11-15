@@ -1,5 +1,5 @@
-import { TriageScreen } from "../../src/features/triage/TriageScreen";
+import { Redirect } from "expo-router";
 
 export default function TriageTab() {
-  return <TriageScreen />;
+  return <Redirect href="/today" />;
 }

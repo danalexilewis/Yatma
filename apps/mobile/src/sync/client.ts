@@ -1,3 +1,5 @@
+import { gmailContract } from "@yatma/contracts/gmail";
+import { reviewContract, type ReviewSchedule } from "@yatma/contracts/review";
 /**
  * Mobile UserSpace client — Effect RPC JSON over WebSocket (alchemy RpcDurableObject).
  *
@@ -38,8 +40,41 @@ import type {
 import { createClient } from "@eddy-works/never-rest/client";
 import { syncContract } from "@yatma/contracts/sync";
 import { turnContract } from "@yatma/contracts/turn";
+import {
+  SYNC_EVENT_SCHEMA_VERSION,
+  SyncBatch as SyncBatchSchema,
+  TurnFrame as TurnFrameSchema,
+  ChatStreamItem as ChatStreamItemSchema,
+  ChatWrapUpResult as ChatWrapUpResultSchema,
+  TurnGetResult as TurnGetResultSchema,
+} from "@yatma/core";
+import * as Schema from "effect/Schema";
 
-export type SyncClientStatus = "idle" | "connecting" | "connected" | "error";
+const decodeSyncBatch = Schema.decodeUnknownSync(SyncBatchSchema);
+const decodeTurnFrame = Schema.decodeUnknownSync(TurnFrameSchema);
+const decodeChatStreamItem = Schema.decodeUnknownSync(ChatStreamItemSchema);
+const decodeChatWrapUpResult = Schema.decodeUnknownSync(ChatWrapUpResultSchema);
+const decodeTurnGetResult = Schema.decodeUnknownSync(TurnGetResultSchema);
+
+export type SyncClientStatus = "idle" | "connecting" | "connected" | "error" | "upgrade_required";
+
+/** Recognize both typed HTTP failures and the legacy RPC upgrade signal. */
+export function isSyncUpgradeRequired(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  return (
+    ("code" in error && error.code === "upgrade_required") ||
+    ("message" in error && error.message === "upgrade_required")
+  );
+}
+
+function upgradeRequiredError(): Error & { readonly code: "upgrade_required" } {
+  return Object.assign(
+    new Error(
+      "Update Yatma to sync this workspace. Install a current build; your unsent changes remain on this device.",
+    ),
+    { code: "upgrade_required" as const },
+  );
+}
 
 type SyncClientOptions = {
   readonly url: string;
@@ -87,18 +122,26 @@ export function createSyncClient(options: SyncClientOptions) {
   apiUrl.pathname = "/";
   apiUrl.search = "";
   apiUrl.hash = "";
-  const api = createClient({ ...syncContract, ...turnContract }, {
-    baseUrl: apiUrl.toString(),
-    headers: async (): Promise<HeadersInit> => {
-      const token = await options.getToken();
-      return token ? { Authorization: `Bearer ${token}` } : {};
+  const api = createClient(
+    { ...syncContract, ...turnContract, ...gmailContract, ...reviewContract },
+    {
+      baseUrl: apiUrl.toString(),
+      headers: async (): Promise<HeadersInit> => {
+        const token = await options.getToken();
+        return token ? { Authorization: `Bearer ${token}` } : {};
+      },
     },
-  });
+  );
 
-  async function unwrapApiResult<T>(result: { match: <U>(ok: (value: T) => U, error: (error: unknown) => U) => Promise<U> }): Promise<T> {
+  async function unwrapApiResult<T>(result: {
+    match: <U>(ok: (value: T) => U, error: (error: unknown) => U) => Promise<U>;
+  }): Promise<T> {
     return result.match(
       (value) => value,
-      (error) => { throw error; },
+      (error) => {
+        if (isSyncUpgradeRequired(error)) options.onStatus("upgrade_required");
+        throw error;
+      },
     );
   }
 
@@ -222,10 +265,12 @@ export function createSyncClient(options: SyncClientOptions) {
     if (exit._tag === "Failure") {
       const fail = exit.cause.find((c) => c._tag === "Fail");
       if (fail?.error !== undefined) {
+        if (isSyncUpgradeRequired(fail.error)) {
+          options.onStatus("upgrade_required");
+          return upgradeRequiredError();
+        }
         return new Error(
-          typeof fail.error === "object" &&
-            fail.error !== null &&
-            "message" in fail.error
+          typeof fail.error === "object" && fail.error !== null && "message" in fail.error
             ? String((fail.error as { message: unknown }).message)
             : JSON.stringify(fail.error),
         );
@@ -240,7 +285,10 @@ export function createSyncClient(options: SyncClientOptions) {
     const record = data as Record<string, unknown>;
     const tag = record._tag;
 
-    if (tag === "Chunk" && (typeof record.requestId === "string" || typeof record.requestId === "number")) {
+    if (
+      tag === "Chunk" &&
+      (typeof record.requestId === "string" || typeof record.requestId === "number")
+    ) {
       const entry = pending.get(record.requestId);
       if (!entry || entry.kind !== "stream") return;
       entry.markReady();
@@ -253,7 +301,10 @@ export function createSyncClient(options: SyncClientOptions) {
       return;
     }
 
-    if (tag === "Exit" && (typeof record.requestId === "string" || typeof record.requestId === "number")) {
+    if (
+      tag === "Exit" &&
+      (typeof record.requestId === "string" || typeof record.requestId === "number")
+    ) {
       const entry = pending.get(record.requestId);
       if (!entry) return;
       pending.delete(record.requestId);
@@ -349,19 +400,31 @@ export function createSyncClient(options: SyncClientOptions) {
     readonly events: readonly Event[];
     readonly deviceId: DeviceId | string;
   }): Promise<SyncPushResult> {
-    return unwrapApiResult(api.pushEvents({ body: {
-      events: input.events,
-      deviceId: input.deviceId,
-    } }));
+    return unwrapApiResult(
+      api.pushEvents({
+        body: {
+          events: input.events,
+          deviceId: input.deviceId,
+          eventSchemaVersion: SYNC_EVENT_SCHEMA_VERSION,
+        },
+      }),
+    );
   }
 
-  function subscribe(after: number): { readonly ready: Promise<void>; readonly completion: Promise<void> } {
-    return callStream("sync.subscribe", { after }, async (value) => {
-      const batch = value as SyncBatch;
-      if (batch && Array.isArray(batch.events)) {
+  function subscribe(after: number): {
+    readonly ready: Promise<void>;
+    readonly completion: Promise<void>;
+  } {
+    return callStream(
+      "sync.subscribe",
+      { after, eventSchemaVersion: SYNC_EVENT_SCHEMA_VERSION },
+      async (value) => {
+        // Decode the entire batch before publishing or acknowledging its cursor.
+        // A future event type must force upgrade/retry, never disappear in a fold.
+        const batch = decodeSyncBatch(value);
         await options.onSyncBatch?.(batch);
-      }
-    });
+      },
+    );
   }
 
   async function deleteAccount(): Promise<{ readonly ok: true }> {
@@ -373,9 +436,13 @@ export function createSyncClient(options: SyncClientOptions) {
     input: ChatSendInput,
     onItem: (item: ChatStreamItem) => void,
   ): Promise<void> {
-    const stream = callStream("chat.send", input, (value) => {
-      onItem(value as ChatStreamItem);
-    });
+    const stream = callStream(
+      "chat.send",
+      { ...input, eventSchemaVersion: SYNC_EVENT_SCHEMA_VERSION },
+      (value) => {
+        onItem(decodeChatStreamItem(value));
+      },
+    );
     await stream.completion;
   }
 
@@ -385,11 +452,20 @@ export function createSyncClient(options: SyncClientOptions) {
   }
 
   async function turnStart(input: TurnStartInput): Promise<TurnReceipt> {
-    return unwrapApiResult(api.startTurn({ body: input }));
+    return unwrapApiResult(
+      api.startTurn({ body: { ...input, eventSchemaVersion: SYNC_EVENT_SCHEMA_VERSION } }),
+    );
   }
 
   async function turnGet(input: TurnGetInput): Promise<TurnGetResult> {
-    return unwrapApiResult(api.getTurn({ params: { turnId: input.turnId } }));
+    return decodeTurnGetResult(
+      await unwrapApiResult(
+        api.getTurn({
+          params: { turnId: input.turnId },
+          query: { eventSchemaVersion: String(SYNC_EVENT_SCHEMA_VERSION) },
+        }),
+      ),
+    );
   }
 
   async function turnStop(input: TurnStopInput): Promise<TurnStopResult> {
@@ -400,14 +476,21 @@ export function createSyncClient(options: SyncClientOptions) {
     input: TurnObserveInput,
     onFrame: (frame: TurnFrame) => void,
   ): { readonly ready: Promise<void>; readonly completion: Promise<void> } {
-    return callStream("turn.observe", input, (value) => {
-      onFrame(value as TurnFrame);
-    });
+    return callStream(
+      "turn.observe",
+      { ...input, eventSchemaVersion: SYNC_EVENT_SCHEMA_VERSION },
+      (value) => {
+        onFrame(decodeTurnFrame(value));
+      },
+    );
   }
 
   async function chatWrapUp(input: ChatWrapUpInput): Promise<ChatWrapUpResult> {
-    const result = await callUnary("chat.wrapUp", input);
-    return result as ChatWrapUpResult;
+    const result = await callUnary("chat.wrapUp", {
+      ...input,
+      eventSchemaVersion: SYNC_EVENT_SCHEMA_VERSION,
+    });
+    return decodeChatWrapUpResult(result);
   }
 
   async function transcribe(input: TranscribeInput): Promise<TranscribeResult> {
@@ -426,6 +509,15 @@ export function createSyncClient(options: SyncClientOptions) {
   }
 
   return {
+    readReviewSchedule: () => unwrapApiResult(api.readReviewSchedule({})),
+    saveReviewSchedule: (body: ReviewSchedule) => unwrapApiResult(api.saveReviewSchedule({ body })),
+    gmailStatus: () => unwrapApiResult(api.gmailStatus({})),
+    beginGmail: () => unwrapApiResult(api.beginGmail({ body: {} })),
+    completeGmail: (body: { code: string; state: string }) =>
+      unwrapApiResult(api.completeGmail({ body })),
+    importGmail: (pageToken?: string) =>
+      unwrapApiResult(api.importGmail({ body: pageToken ? { pageToken } : {} })),
+    disconnectGmail: () => unwrapApiResult(api.disconnectGmail({ body: {} })),
     connect,
     disconnect,
     ping,

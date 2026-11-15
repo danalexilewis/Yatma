@@ -1,7 +1,21 @@
-import type { ProjectId, Quadrant, TaskStatus } from "@yatma/core";
-import { ProjectId as ProjectIdSchema, TaskId as TaskIdSchema, quadrantLabel } from "@yatma/core";
+import type { ProjectId, TaskStatus, TaskPriority } from "@yatma/core";
+import { ProjectId as ProjectIdSchema, TaskId as TaskIdSchema } from "@yatma/core";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
+
+import {
+  addCalendarDays,
+  localCalendarDate,
+  scheduledDateForPreset,
+  type SchedulePreset,
+} from "@yatma/core";
+import { ChoiceMenu } from "../../ui/ChoiceMenu";
+import { TaskTodosEditor } from "./TaskTodosEditor";
+import { TaskMetadata } from "./TaskMetadata";
+import { MinutesField } from "../today/TodayControls";
+import { useTaskInteraction } from "./useTaskInteraction";
+import { useTaskNavigation } from "./useTaskNavigation";
+import { useStackPlayer } from "../player/PlayerProvider";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useAppStore, useFoldedState } from "../../state/atoms";
@@ -12,24 +26,20 @@ import {
   selectTaskHistory,
 } from "../../state/selectors";
 import { useTheme } from "../../theme/theme";
-import { DateEditor, Row, Screen } from "../../ui";
+import { DateEditor, IconButton, Row, Screen } from "../../ui";
 
 const STATUSES: readonly TaskStatus[] = ["todo", "in_progress", "done"];
-const QUADRANTS: ReadonlyArray<Quadrant | "inbox"> = [
-  "inbox",
-  "do",
-  "schedule",
-  "delegate",
-  "eliminate",
-];
 
 /** Task detail: editable fields, project, history, Discuss → chat. */
-export function TaskSheet() {
+export function TaskSheet(props: { readonly closeButton?: ReactNode }) {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const theme = useTheme();
   const folded = useFoldedState();
   const store = useAppStore();
+  const interaction = useTaskInteraction(id ?? "t_00000000");
+  const navigation = useTaskNavigation();
+  const player = useStackPlayer();
   const { updateTask } = store;
   const task = id ? selectTask(folded, id) : undefined;
   const project = task?.projectId ? selectProject(folded, task.projectId) : undefined;
@@ -39,6 +49,9 @@ export function TaskSheet() {
   const [draftKey, setDraftKey] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
+  const [estimate, setEstimate] = useState("");
+  const [fieldError, setFieldError] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -46,11 +59,14 @@ export function TaskSheet() {
     setDraftKey(task.id);
     setTitle(task.title);
     setNotes(task.notes ?? "");
+    setEstimate(task.estimateMinutes == null ? "" : String(task.estimateMinutes));
+    setFieldError(null);
   }
 
   if (!task) {
     return (
       <Screen edges={["bottom"]}>
+        <View style={{ alignItems: "flex-end", paddingHorizontal: 16 }}>{props.closeButton}</View>
         <View style={styles.centered}>
           <Text style={{ color: theme.colors.muted }}>Task not found</Text>
         </View>
@@ -58,8 +74,83 @@ export function TaskSheet() {
     );
   }
 
+  const inputStyle = {
+    color: theme.colors.ink,
+    backgroundColor: theme.colors.surface,
+    borderColor: theme.colors.line,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 44,
+    fontSize: 16,
+  };
   const currentTask = task;
+  const todayEntry = player.entries.find((entry) => entry.taskId === task.id);
   const taskId = TaskIdSchema.make(currentTask.id);
+  const today = localCalendarDate(new Date());
+  const sunday = scheduledDateForPreset(today, "this_week")!;
+  const scheduleGroup = !currentTask.scheduledDate
+    ? "later"
+    : currentTask.scheduledDate === today
+      ? "today"
+      : currentTask.scheduledDate > today && currentTask.scheduledDate <= sunday
+        ? "this_week"
+        : currentTask.scheduledDate > sunday &&
+            currentTask.scheduledDate <= addCalendarDays(sunday, 7)
+          ? "next_week"
+          : null;
+
+  async function saveScheduling(fields: {
+    priority?: TaskPriority | null;
+    scheduledDate?: string | null;
+  }) {
+    setFieldError(null);
+    try {
+      if (fields.scheduledDate !== undefined)
+        await player.daily.scheduleTask(taskId, fields.scheduledDate, player.date, player.timezone);
+      else await updateTask({ taskId, ...fields });
+    } catch (cause) {
+      setFieldError(cause instanceof Error ? cause.message : "Could not save scheduling.");
+    }
+  }
+  async function schedule(preset: SchedulePreset) {
+    await saveScheduling({
+      scheduledDate: scheduledDateForPreset(localCalendarDate(new Date()), preset),
+    });
+  }
+
+  async function savePlanningFields() {
+    const minutes = estimate.trim() ? Number(estimate) : null;
+    if (minutes !== null && !(minutes > 0 && minutes <= 1440)) {
+      setFieldError("Use an estimate between 1 and 1440 minutes, or leave it blank.");
+      return;
+    }
+    setFieldError(null);
+    try {
+      await updateTask({
+        taskId,
+        estimateMinutes: minutes,
+      });
+    } catch (cause) {
+      setFieldError(cause instanceof Error ? cause.message : "Could not save task details.");
+    }
+  }
+
+  async function toggleTodaySchedule() {
+    if (adding) return;
+    setAdding(true);
+    setFieldError(null);
+    try {
+      if (currentTask.scheduledDate === player.date)
+        await player.daily.scheduleTask(taskId, null, player.date, player.timezone);
+      else await player.daily.scheduleTask(taskId, player.date, player.date, player.timezone);
+    } catch (cause) {
+      setFieldError(cause instanceof Error ? cause.message : "Could not update task scheduling.");
+    } finally {
+      setAdding(false);
+    }
+  }
 
   async function saveTitle() {
     const next = title.trim();
@@ -77,13 +168,11 @@ export function TaskSheet() {
 
   async function setStatus(status: TaskStatus) {
     if (status === currentTask.status) return;
-    await updateTask({ taskId, status });
-  }
-
-  async function setQuadrant(value: Quadrant | "inbox") {
-    const quadrant = value === "inbox" ? null : value;
-    if (quadrant === currentTask.quadrant) return;
-    await updateTask({ taskId, quadrant });
+    try {
+      await interaction.setStatus(status);
+    } catch {
+      /* Shared error is rendered below. */
+    }
   }
 
   async function setProject(projectId: ProjectId | null) {
@@ -97,8 +186,7 @@ export function TaskSheet() {
     setDeleteError(null);
     try {
       await updateTask({ taskId, deleted: true });
-      if (router.canGoBack()) router.back();
-      else router.replace("/");
+      navigation.closeTask();
     } catch (cause) {
       setDeleteError(cause instanceof Error ? cause.message : "Could not delete the task.");
     } finally {
@@ -108,6 +196,10 @@ export function TaskSheet() {
 
   async function recoverTask() {
     try {
+      if (!currentTask.deletedAt) {
+        await interaction.setStatus("todo");
+        return;
+      }
       await store.executeLocalCommands([
         {
           type: "task.update",
@@ -126,6 +218,50 @@ export function TaskSheet() {
 
   return (
     <Screen edges={["bottom"]}>
+      <View style={[styles.header, { borderColor: theme.colors.line }]}>
+        <Text
+          accessibilityRole="header"
+          style={{ flex: 1, color: theme.colors.ink, fontSize: 18, fontWeight: "600" }}
+        >
+          Task
+        </Text>
+        <IconButton
+          name="chatbubble-outline"
+          accessibilityLabel="Discuss task"
+          tooltip="Discuss"
+          onPress={() => router.dismissTo({ pathname: "/", params: { taskId: currentTask.id } })}
+        />
+        {!currentTask.deletedAt && currentTask.status !== "done" ? (
+          <IconButton
+            name="today-outline"
+            accessibilityLabel={
+              currentTask.scheduledDate === player.date
+                ? "Unschedule from Today"
+                : "Schedule for today"
+            }
+            color={currentTask.scheduledDate === player.date ? theme.colors.pine : undefined}
+            disabled={adding}
+            onPress={() => void toggleTodaySchedule()}
+          />
+        ) : null}
+        {!currentTask.deletedAt ? (
+          <IconButton
+            name="trash-outline"
+            accessibilityLabel="Delete task"
+            disabled={deleting}
+            onPress={() => void deleteTask()}
+          />
+        ) : null}
+        {props.closeButton}
+      </View>
+      {deleteError ? (
+        <Text
+          accessibilityRole="alert"
+          style={{ color: theme.colors.danger, paddingHorizontal: 20 }}
+        >
+          {deleteError}
+        </Text>
+      ) : null}
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: theme.space.screenX,
@@ -133,21 +269,38 @@ export function TaskSheet() {
         }}
         keyboardShouldPersistTaps="handled"
       >
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Task name</Text>
         <TextInput
+          accessibilityLabel="Task name"
           value={title}
           onChangeText={setTitle}
           onBlur={() => void saveTitle()}
           onSubmitEditing={() => void saveTitle()}
-          style={{
-            color: theme.colors.ink,
-            fontSize: 24,
-            fontWeight: "700",
-            marginTop: 8,
-          }}
+          style={[inputStyle, { fontSize: 22, fontWeight: "600" }]}
           placeholder="Title"
           placeholderTextColor={theme.colors.muted}
         />
 
+        <View style={{ marginTop: 8 }}>
+          <TaskMetadata task={currentTask} />
+        </View>
+        {todayEntry ? (
+          <MinutesField
+            label="Today's allocation (minutes)"
+            value={todayEntry.allocationMinutes}
+            disabled={player.runtimeState.pending}
+            onSave={(allocationMinutes) =>
+              player.runtime.execute([
+                { type: "day.update", entryId: todayEntry.id, set: { allocationMinutes } },
+              ])
+            }
+          />
+        ) : null}
+        {player.runtimeState.error ? (
+          <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
+            {player.runtimeState.error}
+          </Text>
+        ) : null}
         {currentTask.deletedAt || currentTask.status === "done" ? (
           <Pressable
             style={[styles.discuss, { backgroundColor: theme.colors.pine, marginTop: 16 }]}
@@ -160,28 +313,102 @@ export function TaskSheet() {
             </Text>
           </Pressable>
         ) : null}
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Description</Text>
         <TextInput
+          accessibilityLabel="Task description"
           value={notes}
           onChangeText={setNotes}
           onBlur={() => void saveNotes()}
           multiline
-          style={{
-            color: theme.colors.muted,
-            fontSize: theme.type.row,
-            marginTop: 8,
-            minHeight: 72,
-          }}
-          placeholder="Notes"
+          style={[inputStyle, { minHeight: 112, textAlignVertical: "top", lineHeight: 24 }]}
+          placeholder="Add a description"
           placeholderTextColor={theme.colors.muted}
         />
 
-        <Text style={[styles.label, { color: theme.colors.muted }]}>Due date</Text>
+        <TaskTodosEditor
+          key={currentTask.id}
+          todos={currentTask.todos ?? []}
+          onSave={(todos) => updateTask({ taskId, todos })}
+        />
+
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Original estimate (minutes)</Text>
+        <TextInput
+          accessibilityLabel="Original task estimate in minutes"
+          value={estimate}
+          onChangeText={setEstimate}
+          keyboardType="decimal-pad"
+          onBlur={() => void savePlanningFields()}
+          placeholder="No estimate"
+          placeholderTextColor={theme.colors.muted}
+          style={inputStyle}
+        />
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Priority</Text>
+        <ChoiceMenu
+          field
+          label={
+            currentTask.priority
+              ? currentTask.priority[0]!.toUpperCase() + currentTask.priority.slice(1)
+              : "No priority"
+          }
+          accessibilityLabel="Task priority"
+          groups={[
+            {
+              options: ([null, "high", "medium", "low"] as const).map((priority) => ({
+                label: priority ? priority[0]!.toUpperCase() + priority.slice(1) : "No priority",
+                selected: (currentTask.priority ?? null) === priority,
+                onPress: () => void saveScheduling({ priority }),
+              })),
+            },
+          ]}
+        />
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Scheduled date</Text>
+        <View style={styles.choiceRow}>
+          {(
+            [
+              ["today", "Today"],
+              ["this_week", "This week"],
+              ["next_week", "Next week"],
+              ["later", "Later"],
+            ] as const
+          ).map(([preset, label]) => (
+            <Choice
+              key={preset}
+              label={label}
+              active={scheduleGroup === preset}
+              onPress={() => void schedule(preset)}
+            />
+          ))}
+        </View>
+        <View style={{ marginTop: 8 }}>
+          <DateEditor
+            label="Scheduled date"
+            value={currentTask.scheduledDate ?? null}
+            onSave={(scheduledDate) =>
+              player.daily.scheduleTask(taskId, scheduledDate, player.date, player.timezone)
+            }
+            clearable
+            showQuickChoices={false}
+          />
+        </View>
+        <Text style={{ color: theme.colors.muted, fontSize: 12, marginTop: 6 }}>
+          When you plan to work on this. This week picks Sunday; next week picks Monday.
+        </Text>
+        {fieldError ? (
+          <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
+            {fieldError}
+          </Text>
+        ) : null}
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Due date</Text>
+        <Text style={{ color: theme.colors.muted, fontSize: 12, marginBottom: 8 }}>
+          An optional deadline, separate from when you plan to work.
+        </Text>
         <DateEditor
+          showQuickChoices={false}
           value={currentTask.dueDate}
           onSave={(dueDate) => updateTask({ taskId, dueDate })}
         />
 
-        <Text style={[styles.label, { color: theme.colors.muted }]}>Status</Text>
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Status</Text>
         <View style={styles.choiceRow}>
           {STATUSES.map((status) => (
             <Choice
@@ -189,23 +416,18 @@ export function TaskSheet() {
               label={status.replace("_", " ")}
               active={currentTask.status === status}
               onPress={() => void setStatus(status)}
+              disabled={interaction.pending || currentTask.deletedAt !== null}
             />
           ))}
         </View>
 
-        <Text style={[styles.label, { color: theme.colors.muted }]}>Urgency & importance</Text>
-        <View style={styles.choiceRow}>
-          {QUADRANTS.map((quadrant) => (
-            <Choice
-              key={quadrant}
-              label={quadrantLabel(quadrant === "inbox" ? null : quadrant)}
-              active={(currentTask.quadrant ?? "inbox") === quadrant}
-              onPress={() => void setQuadrant(quadrant)}
-            />
-          ))}
-        </View>
+        {interaction.error ? (
+          <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>
+            {interaction.error}
+          </Text>
+        ) : null}
 
-        <Text style={[styles.label, { color: theme.colors.muted }]}>Project</Text>
+        <Text style={[styles.label, { color: theme.colors.ink }]}>Project</Text>
         <View style={styles.choiceRow}>
           <Choice
             label="Unassigned"
@@ -222,41 +444,20 @@ export function TaskSheet() {
           ))}
         </View>
         {project ? (
-          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 4 }}>
-            Current: {project.title}
-          </Text>
-        ) : null}
-
-        <Pressable
-          style={[styles.discuss, { backgroundColor: theme.colors.pine, marginTop: 20 }]}
-          onPress={() =>
-            router.dismissTo({
-              pathname: "/",
-              params: { taskId: currentTask.id },
-            })
-          }
-        >
-          <Text style={{ color: theme.colors.onPine, fontWeight: "600", fontSize: theme.type.row }}>
-            Discuss
-          </Text>
-        </Pressable>
-
-        {!currentTask.deletedAt ? (
           <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Delete task"
-            disabled={deleting}
-            onPress={() => void deleteTask()}
-            style={[styles.discuss, { marginTop: 12 }]}
+            accessibilityRole="link"
+            accessibilityLabel={`Open project: ${project.title}`}
+            onPress={() => navigation.openProject(project.id)}
+            style={{ minHeight: 44, justifyContent: "center" }}
           >
-            <Text style={{ color: theme.colors.danger, fontWeight: "600", fontSize: theme.type.row }}>
-              Delete task
+            <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta }}>
+              Open project: {project.title}
+              {project.archivedAt ? " (archived)" : ""}
             </Text>
           </Pressable>
         ) : null}
-        {deleteError ? <Text accessibilityRole="alert" style={{ color: theme.colors.danger }}>{deleteError}</Text> : null}
 
-        <Text style={[styles.label, { color: theme.colors.muted, marginTop: 28 }]}>History</Text>
+        <Text style={[styles.label, { color: theme.colors.ink, marginTop: 28 }]}>History</Text>
         {history.length === 0 ? (
           <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>
             No history yet.
@@ -287,22 +488,27 @@ function Choice(props: {
   readonly label: string;
   readonly active: boolean;
   readonly onPress: () => void;
+  readonly disabled?: boolean;
 }) {
   const theme = useTheme();
   return (
     <Pressable
       onPress={props.onPress}
+      disabled={props.disabled}
+      accessibilityRole="radio"
+      accessibilityState={{ disabled: props.disabled, selected: props.active }}
       style={[
         styles.choice,
         {
-          backgroundColor: props.active ? theme.colors.pine : theme.colors.pineSoft,
-          minHeight: 36,
+          backgroundColor: props.active ? theme.colors.pineSoft : theme.colors.surface,
+          borderColor: props.active ? theme.colors.pine : theme.colors.line,
+          minHeight: 44,
         },
       ]}
     >
       <Text
         style={{
-          color: props.active ? theme.colors.onPine : theme.colors.pine,
+          color: props.active ? theme.colors.pine : theme.colors.ink,
           fontSize: theme.type.meta,
           fontWeight: "600",
           textTransform: "capitalize",
@@ -315,6 +521,13 @@ function Choice(props: {
 }
 
 const styles = StyleSheet.create({
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    minHeight: 60,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   label: {
     fontSize: 13,
@@ -328,15 +541,18 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   choice: {
-    borderRadius: 999,
+    borderWidth: 1,
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
     justifyContent: "center",
   },
   discuss: {
     alignSelf: "flex-start",
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 18,
-    paddingVertical: 12,
+    minHeight: 44,
+    justifyContent: "center",
+    paddingVertical: 10,
   },
 });

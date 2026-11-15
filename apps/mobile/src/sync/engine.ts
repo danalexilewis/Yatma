@@ -1,11 +1,12 @@
 import type { DeviceId, Event, PingResult, SyncBatch } from "@yatma/core";
 
+import { acknowledgeEvents, getSyncMeta, loadOutboxEvents } from "../db/database";
 import {
-  acknowledgeEvents,
-  getSyncMeta,
-  loadOutboxEvents,
-} from "../db/database";
-import { createSyncClient, type SyncClient, type SyncClientStatus } from "./client";
+  createSyncClient,
+  isSyncUpgradeRequired,
+  type SyncClient,
+  type SyncClientStatus,
+} from "./client";
 
 const CURSOR_KEY = "after";
 const OUTBOX_RETRY_MS = 15_000;
@@ -50,14 +51,38 @@ export function startSyncEngine(options: SyncEngineOptions): SyncEngine {
   activeEngine?.stop();
 
   let stopped = false;
+  let upgradeRequired = false;
   let flushing = false;
   let booting = false;
   let retryTimer: ReturnType<typeof setInterval> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let reconnectAttempt = 0;
 
+  function clearTimers(): void {
+    if (retryTimer) clearInterval(retryTimer);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    retryTimer = null;
+    reconnectTimer = null;
+  }
+
+  function requireUpgrade(): void {
+    if (stopped || upgradeRequired) return;
+    upgradeRequired = true;
+    clearTimers();
+    client.disconnect();
+    options.onStatus("upgrade_required");
+  }
+
+  function handleBootFailure(error: unknown): void {
+    if (isSyncUpgradeRequired(error)) requireUpgrade();
+    else if (!stopped && !upgradeRequired) {
+      options.onStatus("error");
+      scheduleReconnect();
+    }
+  }
+
   async function applyBatch(batch: SyncBatch): Promise<void> {
-    if (stopped) return;
+    if (stopped || upgradeRequired) return;
     await options.mergeRemoteEvents(batch.events, { key: CURSOR_KEY, after: batch.after });
   }
 
@@ -65,45 +90,52 @@ export function startSyncEngine(options: SyncEngineOptions): SyncEngine {
     url: options.url,
     getToken: options.getToken,
     onStatus: (status) => {
-      options.onStatus(status);
+      if (status === "upgrade_required") requireUpgrade();
+      else if (!stopped && !upgradeRequired) options.onStatus(status);
     },
     onSyncBatch: applyBatch,
   });
 
   async function flushOutbox(): Promise<void> {
-    if (stopped || flushing) return;
+    if (stopped || upgradeRequired || flushing) return;
     flushing = true;
     try {
       const events = await loadOutboxEvents();
-      if (stopped || events.length === 0) return;
+      if (stopped || upgradeRequired || events.length === 0) return;
       const result = await client.push({
         events,
         deviceId: options.deviceId as DeviceId,
       });
-      if (stopped) return;
+      if (stopped || upgradeRequired) return;
       await acknowledgeEvents(result.assigned);
+    } catch (error) {
+      if (isSyncUpgradeRequired(error)) requireUpgrade();
+      throw error;
     } finally {
       flushing = false;
     }
   }
 
   async function boot(): Promise<void> {
-    if (stopped || booting) return;
+    if (stopped || upgradeRequired || booting) return;
     booting = true;
     try {
       await client.connect();
-      if (stopped) return;
+      if (stopped || upgradeRequired) return;
       reconnectAttempt = 0;
       await client.ping();
-      if (stopped) return;
+      if (stopped || upgradeRequired) return;
       const after = await readCursor();
-      if (stopped) return;
+      if (stopped || upgradeRequired) return;
       const subscription = client.subscribe(after);
       await subscription.ready;
-      if (stopped) return;
+      if (stopped || upgradeRequired) return;
       void subscription.completion.then(
         () => scheduleReconnect(),
-        () => scheduleReconnect(),
+        (error: unknown) => {
+          if (isSyncUpgradeRequired(error)) requireUpgrade();
+          else scheduleReconnect();
+        },
       );
       await flushOutbox();
     } finally {
@@ -112,27 +144,21 @@ export function startSyncEngine(options: SyncEngineOptions): SyncEngine {
   }
 
   function scheduleReconnect(): void {
-    if (stopped || reconnectTimer) return;
+    if (stopped || upgradeRequired || reconnectTimer) return;
     const delay = Math.min(2_000 * 2 ** reconnectAttempt, 60_000);
     reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
-      if (!stopped) {
-        void boot().catch(() => {
-          options.onStatus("error");
-          scheduleReconnect();
-        });
+      if (!stopped && !upgradeRequired) {
+        void boot().catch(handleBootFailure);
       }
     }, delay);
   }
 
-  void boot().catch(() => {
-    options.onStatus("error");
-    scheduleReconnect();
-  });
+  void boot().catch(handleBootFailure);
 
   retryTimer = setInterval(() => {
-    if (stopped) return;
+    if (stopped || upgradeRequired) return;
     void flushOutbox().catch(() => {});
   }, OUTBOX_RETRY_MS);
 
@@ -142,16 +168,11 @@ export function startSyncEngine(options: SyncEngineOptions): SyncEngine {
     ping: () => client.ping(),
     deleteAccount: () => client.deleteAccount(),
     stop: () => {
+      if (stopped) return;
       stopped = true;
-      if (retryTimer) {
-        clearInterval(retryTimer);
-        retryTimer = null;
-      }
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
+      clearTimers();
       client.disconnect();
+      options.onStatus("idle");
       if (activeEngine === engine) activeEngine = null;
     },
   };

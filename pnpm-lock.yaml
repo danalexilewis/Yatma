@@ -36,6 +36,12 @@ catalogs:
     expo-audio:
       specifier: 58.0.9
       version: 58.0.9
+    expo-notifications:
+      specifier: 58.1.1
+      version: 58.1.1
+    gurki:
+      specifier: github:danalexilewis/gurki#d1b1f7fad53fc5c880a23faccd9007cdce7fa250
+      version: 0.1.0
     neverthrow:
       specifier: 8.2.0
       version: 8.2.0
@@ -63,6 +69,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.12.4
+      gurki:
+        specifier: 'catalog:'
+        version: https://codeload.github.com/danalexilewis/gurki/tar.gz/d1b1f7fad53fc5c880a23faccd9007cdce7fa250
       happy-dom:
         specifier: ^21.0.1
         version: 21.0.1
@@ -138,6 +147,9 @@ importers:
       expo-linking:
         specifier: ~58.0.11
         version: 58.0.11(expo@58.0.6)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@5.9.2)
+      expo-notifications:
+        specifier: 'catalog:'
+        version: 58.1.1(expo@58.0.6)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@5.9.2)
       expo-router:
         specifier: ~58.0.16
         version: 58.0.16(45d39151d7d914c724ba0e77083fcfe4)
@@ -2838,6 +2850,10 @@ packages:
       zod:
         optional: true
 
+  abort-controller@3.0.0:
+    resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
+    engines: {node: '>=6.5'}
+
   accepts@1.3.8:
     resolution: {integrity: sha512-PYAthTa2m2VKxuvSD3DPC/Gy+U+sOA1LAuT8mkmRuvw+NACSaeXEQ+NHcVF7rONl6qcaxV3Uuemwawk+7+SJLw==}
     engines: {node: '>= 0.6'}
@@ -3034,6 +3050,9 @@ packages:
         optional: true
       expo-widgets:
         optional: true
+
+  badgin@1.2.3:
+    resolution: {integrity: sha512-NQGA7LcfCpSzIbGRbkgjgdWkjy7HI+Th5VLxTJfW5EeaAf3fnS+xWQaQOCYiny+q6QSvxqoSO04vCx+4u++EJw==}
 
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
@@ -3378,6 +3397,10 @@ packages:
     resolution: {integrity: sha512-aIL5Fx7mawVa300al2BnEE4iNvo1qETxLrPI/o05L7z6go7fCw1J6EQmbK4FmJ2AS7kgVF/KEZWufBfdClMcPg==}
     engines: {node: '>= 0.6'}
 
+  event-target-shim@5.0.1:
+    resolution: {integrity: sha512-i/2XbnSz/uxRCU6+NdVJgKWDTM427+MqYbkQzD321DuCQJUqOuJKIA0IM2+W2xtYHdKOmZ4dR6fExsd4SXL+WQ==}
+    engines: {node: '>=6'}
+
   eventemitter3@5.0.1:
     resolution: {integrity: sha512-GWkBvjiSZK87ELrYOSESUYeVIc9mvLLf/nXalMOS5dYrgZq9o5OVkbZAVM06CVxYsCwH9BDZFPlQTlPA1j4ahA==}
 
@@ -3524,6 +3547,13 @@ packages:
 
   expo-modules-macros@0.15.0:
     resolution: {integrity: sha512-SPNpejC1GTb5g519PQXRHnwNjC3NJE/IP8yvuwwKJ9cfel7g7gQk/11qsvlNQBdk/AOnu2uhsmBMpTVit2WMfA==}
+
+  expo-notifications@58.1.1:
+    resolution: {integrity: sha512-3Zw3wro/kUGd71pce3cE4wDmR+qBLRhutz/OlQMUgCEWcHzxWjh7Cu3G2pP30TYMg7HM6rK6oOdrKfDl37ozzQ==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+      react-native: '*'
 
   expo-router@58.0.16:
     resolution: {integrity: sha512-hH1DXmk1nbgPlvYsAlWfs48sBtl7yXGru5puI6TQJftEptUovF3Zz6+umHl/DdYj5gCej0MpmecU/IiRRrzJNw==}
@@ -3774,6 +3804,12 @@ packages:
   graphql@16.11.0:
     resolution: {integrity: sha512-mS1lbMsxgQj6hge1XZ6p7GPhbrtFwUFYi3wRzXAC/FmYnyXMTvvI3td3rjmQ2u8ewXueaSvRPWaEcgVVOT9Jnw==}
     engines: {node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0}
+
+  gurki@https://codeload.github.com/danalexilewis/gurki/tar.gz/d1b1f7fad53fc5c880a23faccd9007cdce7fa250:
+    resolution: {gitHosted: true, integrity: sha512-MCU15TMXi1IcGM6dc9cROpRmn27+thqd9xpHAgYw3roahB6tbyXL5rn+BS5xAgCPjEaGLJVp5te1ND8ht5WXow==, tarball: https://codeload.github.com/danalexilewis/gurki/tar.gz/d1b1f7fad53fc5c880a23faccd9007cdce7fa250}
+    version: 0.1.0
+    engines: {node: '>=20'}
+    hasBin: true
 
   happy-dom@21.0.1:
     resolution: {integrity: sha512-pRBs/u9fhrncyByOl58DMex0R2uAj6ZPKWIjV5j5yNGZBqLw3P6BTRhlc0DD5b/Ht4/6JYTMuE2LJhUWRC6SGw==}
@@ -7783,6 +7819,10 @@ snapshots:
       typescript: 5.9.2
       zod: 3.25.76
 
+  abort-controller@3.0.0:
+    dependencies:
+      event-target-shim: 5.0.1
+
   accepts@1.3.8:
     dependencies:
       mime-types: 2.1.35
@@ -8037,6 +8077,8 @@ snapshots:
     transitivePeerDependencies:
       - '@babel/core'
       - supports-color
+
+  badgin@1.2.3: {}
 
   balanced-match@4.0.4: {}
 
@@ -8323,6 +8365,8 @@ snapshots:
 
   etag@1.8.1: {}
 
+  event-target-shim@5.0.1: {}
+
   eventemitter3@5.0.1: {}
 
   eventemitter3@5.0.4: {}
@@ -8486,6 +8530,20 @@ snapshots:
       react-native: 0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0)
 
   expo-modules-macros@0.15.0: {}
+
+  expo-notifications@58.1.1(expo@58.0.6)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@5.9.2):
+    dependencies:
+      '@expo/image-utils': 0.12.4(typescript@5.9.2)
+      abort-controller: 3.0.0
+      badgin: 1.2.3
+      expo: 58.0.6(@babel/core@7.29.7)(@expo/dom-webview@58.0.2)(@expo/metro-runtime@58.0.13)(expo-router@58.0.16)(react-dom@19.3.0(react@19.3.0))(react-native-web@0.21.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0))(react-native-worklets@0.13.0(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0))(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(react@19.3.0)(typescript@5.9.2)
+      expo-application: 58.0.4(expo@58.0.6)
+      expo-constants: 58.0.10(expo@58.0.6)(react-native@0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0))(typescript@5.9.2)
+      react: 19.3.0
+      react-native: 0.88.0-rc.3(@babel/core@7.29.7)(@react-native/metro-config@0.88.0-rc.3(@babel/core@7.29.7))(@types/react@19.3.0)(react@19.3.0)
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
 
   expo-router@58.0.16(45d39151d7d914c724ba0e77083fcfe4):
     dependencies:
@@ -8748,6 +8806,11 @@ snapshots:
   graphmatch@1.1.1: {}
 
   graphql@16.11.0: {}
+
+  gurki@https://codeload.github.com/danalexilewis/gurki/tar.gz/d1b1f7fad53fc5c880a23faccd9007cdce7fa250:
+    dependencies:
+      yaml: 2.9.1
+      zod: 3.25.76
 
   happy-dom@21.0.1:
     dependencies:

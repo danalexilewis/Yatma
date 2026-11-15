@@ -259,6 +259,12 @@ export function planUpdate(
     title?: string;
     tags?: readonly string[];
     notes?: string;
+    todos?: TaskUpdateInput["todos"];
+    estimateMinutes?: number | null;
+    place?: string | null;
+    mentalMode?: string | null;
+    priority?: TaskUpdateInput["priority"];
+    scheduledDate?: string | null;
     dueDate?: string | null;
     status?: TaskStatus;
     quadrant?: Quadrant | null;
@@ -274,7 +280,24 @@ export function planUpdate(
     const tags = [...new Set(input.tags.map((tag) => tag.trim()).filter(Boolean))];
     if (JSON.stringify(tags) !== JSON.stringify(current.tags ?? [])) set.tags = tags;
   }
+  if (
+    input.todos !== undefined &&
+    JSON.stringify(input.todos) !== JSON.stringify(current.todos ?? [])
+  )
+    set.todos = input.todos;
   if (input.notes !== undefined && input.notes !== current.notes) set.notes = input.notes;
+  if (
+    input.estimateMinutes !== undefined &&
+    input.estimateMinutes !== (current.estimateMinutes ?? null)
+  )
+    set.estimateMinutes = input.estimateMinutes;
+  if (input.place !== undefined && input.place !== (current.place ?? null)) set.place = input.place;
+  if (input.mentalMode !== undefined && input.mentalMode !== (current.mentalMode ?? null))
+    set.mentalMode = input.mentalMode;
+  if (input.priority !== undefined && input.priority !== (current.priority ?? null))
+    set.priority = input.priority;
+  if (input.scheduledDate !== undefined && input.scheduledDate !== (current.scheduledDate ?? null))
+    set.scheduledDate = input.scheduledDate;
   if (input.dueDate !== undefined && input.dueDate !== current.dueDate) set.dueDate = input.dueDate;
 
   const nextStatus = input.status ?? current.status;
@@ -311,6 +334,14 @@ export function planUpdate(
     title: set.title ?? current.title,
     tags: set.tags ?? current.tags ?? [],
     notes: set.notes ?? current.notes,
+    todos: set.todos ?? current.todos ?? [],
+    estimateMinutes:
+      set.estimateMinutes !== undefined ? set.estimateMinutes : (current.estimateMinutes ?? null),
+    place: set.place !== undefined ? set.place : (current.place ?? null),
+    mentalMode: set.mentalMode !== undefined ? set.mentalMode : (current.mentalMode ?? null),
+    priority: set.priority !== undefined ? set.priority : (current.priority ?? null),
+    scheduledDate:
+      set.scheduledDate !== undefined ? set.scheduledDate : (current.scheduledDate ?? null),
     dueDate: set.dueDate !== undefined ? set.dueDate : current.dueDate,
     status: set.status ?? current.status,
     quadrant: set.quadrant !== undefined ? set.quadrant : current.quadrant,

@@ -29,7 +29,7 @@ export type Reason = typeof Reason.Type;
 // Keep the original v1 reader permissive; new commands validate real calendar dates.
 export const DueDate = Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/));
 export type DueDate = typeof DueDate.Type;
-const CalendarDate = Schema.String.check(
+export const CalendarDate = Schema.String.check(
   Schema.makeFilter(
     (value: string) => isCalendarDate(value) || "Use a valid calendar date (YYYY-MM-DD)",
   ),
@@ -82,12 +82,33 @@ export const Placement = Schema.Union([
 ]);
 export type Placement = typeof Placement.Type;
 
+export const TaskEstimateMinutes = Schema.NullOr(
+  Schema.Number.check(Schema.isFinite(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1440)),
+);
+export const TaskPriority = Schema.Literals(["high", "medium", "low"]);
+export type TaskPriority = typeof TaskPriority.Type;
+export const TaskContext = Schema.NullOr(Schema.String.check(Schema.isMaxLength(200)));
+
+/** Plain checklist entries owned by a task, never independent tasks. */
+export const TaskTodo = Schema.Struct({
+  text: TrimmedNonEmptyString.check(Schema.isMaxLength(500)),
+  done: Schema.Boolean,
+});
+export type TaskTodo = typeof TaskTodo.Type;
+export const TaskTodos = Schema.Array(TaskTodo).check(Schema.isMaxLength(200));
+
 export const Task = Schema.Struct({
   id: TaskId,
   projectId: Schema.NullOr(ProjectId),
   title: Title,
   tags: Schema.optional(TaskTags),
   notes: Notes,
+  todos: Schema.optional(TaskTodos),
+  estimateMinutes: Schema.optional(TaskEstimateMinutes),
+  place: Schema.optional(TaskContext),
+  mentalMode: Schema.optional(TaskContext),
+  priority: Schema.optional(Schema.NullOr(TaskPriority)),
+  scheduledDate: Schema.optional(Schema.NullOr(DueDate)),
   dueDate: Schema.NullOr(DueDate),
   status: TaskStatus,
   /** Null means Inbox (not yet triaged into a quadrant). */
@@ -158,6 +179,12 @@ export const TaskCreateInput = Schema.Struct({
   title: Title,
   tags: Schema.optional(TaskTags),
   notes: Schema.optional(Notes),
+  todos: Schema.optional(TaskTodos),
+  estimateMinutes: Schema.optional(TaskEstimateMinutes),
+  place: Schema.optional(TaskContext),
+  mentalMode: Schema.optional(TaskContext),
+  priority: Schema.optional(Schema.NullOr(TaskPriority)),
+  scheduledDate: Schema.optional(Schema.NullOr(CalendarDate)),
   dueDate: Schema.optional(Schema.NullOr(CalendarDate)),
   reason: Schema.optional(Reason),
 });
@@ -169,6 +196,12 @@ export const TaskUpdateInput = Schema.Struct({
   title: Schema.optional(Title),
   tags: Schema.optional(TaskTags),
   notes: Schema.optional(Notes),
+  todos: Schema.optional(TaskTodos),
+  estimateMinutes: Schema.optional(TaskEstimateMinutes),
+  place: Schema.optional(TaskContext),
+  mentalMode: Schema.optional(TaskContext),
+  priority: Schema.optional(Schema.NullOr(TaskPriority)),
+  scheduledDate: Schema.optional(Schema.NullOr(CalendarDate)),
   dueDate: Schema.optional(Schema.NullOr(CalendarDate)),
   status: Schema.optional(TaskStatus),
   quadrant: Schema.optional(Schema.NullOr(Quadrant)),
@@ -203,6 +236,12 @@ export const TaskUpdatedFields = Schema.Struct({
   title: Schema.optional(Title),
   tags: Schema.optional(TaskTags),
   notes: Schema.optional(Notes),
+  todos: Schema.optional(TaskTodos),
+  estimateMinutes: Schema.optional(TaskEstimateMinutes),
+  place: Schema.optional(TaskContext),
+  mentalMode: Schema.optional(TaskContext),
+  priority: Schema.optional(Schema.NullOr(TaskPriority)),
+  scheduledDate: Schema.optional(Schema.NullOr(DueDate)),
   dueDate: Schema.optional(Schema.NullOr(DueDate)),
   status: Schema.optional(TaskStatus),
   quadrant: Schema.optional(Schema.NullOr(Quadrant)),

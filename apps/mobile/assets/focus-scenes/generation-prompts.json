@@ -1,0 +1,21 @@
+{
+  "tool": "built-in image_gen",
+  "generatedOn": "2026-11-11",
+  "dimensions": { "width": 1536, "height": 1024 },
+  "transparentBackground": false,
+  "inputImages": [],
+  "assets": [
+    {
+      "file": "forest-waterfall.png",
+      "prompt": "Use case: photorealistic-natural. Asset type: original full-bleed landscape background for the large ambience pane of a calm focus app, landscape 3:2 composition. Primary request: a serene temperate fern forest with a small natural waterfall pouring over mossy dark rocks into a clear pool, tall conifers and soft distant mist. Style: high-quality cinematic nature photography with realistic fine textures, unhurried and atmospheric, subtle airy overcast morning light, restrained greens and warm grey stone. Composition: waterfall and pool near the middle, forest framing both sides, gently lit open upper depth; immersive environmental scene that can crop naturally in a tall or wide panel. No UI, frames, text, lettering, logos, watermark, people, animals, fantasy objects, game imagery or branded references. Entire image is the natural scene. Create a new original image, not an edit."
+    },
+    {
+      "file": "rain-window.png",
+      "prompt": "Use case: photorealistic-natural. Asset type: original full-bleed landscape background for the large ambience pane of a calm focus app, landscape 3:2 composition. Primary request: peaceful view from inside a cozy quiet room through a tall rain-dappled window onto a soft green garden in gentle rain. Fine droplets and faint flowing water on the glass, a small portion of warm timber window frame, soft warm light on a neutral reading-chair corner or deep sill near the lower edge, lush softly defocused foliage beyond. Style: high-quality atmospheric interior photography, understated natural materials, soft blue-grey rainy daylight balanced with restrained amber interior warmth. Composition: window and garden dominate, open restful environmental depth, feels immersive and can crop naturally in a tall or wide pane. No people, animals, text, lettering, logos, watermark, UI, decorative borders, prominent screens, clutter or branded objects. Entire image is the calm original scene, not a mockup."
+    },
+    {
+      "file": "ocean-coast.png",
+      "prompt": "Use case: photorealistic-natural. Asset type: original full-bleed landscape background for the large ambience pane of a calm focus app, landscape 3:2 composition. Primary request: a peaceful wild ocean coastline seen from a low coastal overlook, gentle pale surf tracing a long curved sandy cove with dark weathered rocks and soft coastal grasses at the edges, a misty headland in the distance and an expansive calm blue-grey sea. Style: high-quality cinematic landscape photography, natural realistic textures, airy soft morning light under a high thin cloud layer, restrained sea-glass teal, pale sand, blue-grey and warm stone. Composition: spacious immersive coastline with horizon in upper third, gentle depth and breathing room, natural cropping for tall or wide pane. No people, animals, boats, buildings, text, lettering, logos, watermark, UI, borders or branded references. Create a new original photograph-like landscape, not an edit."
+    }
+  ]
+}

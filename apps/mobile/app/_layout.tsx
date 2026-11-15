@@ -15,6 +15,10 @@ import { requestCaptureOpen } from "../src/features/capture/captureIntent";
 import { AppStateProvider, useAppStore } from "../src/state/atoms";
 import { createTheme } from "../src/theme/theme";
 import { EmptyState } from "../src/ui/EmptyState";
+import { PlayerProvider } from "../src/features/player/PlayerProvider";
+import { useSyncStatus } from "../src/state/syncStatusAtom";
+import { HoverTooltips } from "../src/ui/HoverTooltips";
+import { WorkspaceShell } from "../src/ui/WorkspaceShell";
 
 function useDictateShortcut() {
   const router = useRouter();
@@ -47,43 +51,65 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: theme.colors.canvas }}>
       <SafeAreaProvider>
+        <HoverTooltips />
         <RegistryProvider>
           <AppStateProvider>
             <AuthProvider>
               <StatusBar style={scheme === "dark" ? "light" : "dark"} />
               <StorageGate>
-                <DictateShortcutBridge />
-                <StorageErrorNotice />
-                <Stack
-                  screenOptions={{
-                    headerShown: false,
-                    headerTintColor: theme.colors.pine,
-                    headerTitleStyle: {
-                      color: theme.colors.ink,
-                      fontWeight: "600",
-                    },
-                    headerStyle: {
-                      backgroundColor: theme.colors.canvas,
-                    },
-                    headerShadowVisible: false,
-                    contentStyle: {
-                      backgroundColor: theme.colors.canvas,
-                    },
-                  }}
-                >
-                  <Stack.Screen name="(tabs)" />
-                  <Stack.Screen name="(auth)/sign-in" options={{ presentation: "modal" }} />
-                  <Stack.Screen
-                    name="task/[id]"
-                    options={{ presentation: "card", headerShown: true, title: "Task" }}
-                  />
-                  <Stack.Screen name="page/[id]" options={{ headerShown: true, title: "Page" }} />
-                  <Stack.Screen name="chat/[id]" options={{ headerShown: true, title: "Chat" }} />
-                  <Stack.Screen
-                    name="project/[id]"
-                    options={{ headerShown: true, title: "Project" }}
-                  />
-                </Stack>
+                <PlayerProvider>
+                  <DictateShortcutBridge />
+                  <StorageErrorNotice />
+                  <SyncUpgradeNotice />
+                  <WorkspaceShell>
+                    <Stack
+                      screenOptions={{
+                        headerShown: false,
+                        headerTintColor: theme.colors.pine,
+                        headerTitleStyle: {
+                          color: theme.colors.ink,
+                          fontWeight: "600",
+                        },
+                        headerStyle: {
+                          backgroundColor: theme.colors.canvas,
+                        },
+                        headerShadowVisible: false,
+                        contentStyle: {
+                          backgroundColor: theme.colors.canvas,
+                        },
+                      }}
+                    >
+                      <Stack.Screen name="(tabs)" />
+                      <Stack.Screen
+                        name="focus"
+                        options={{ presentation: "modal", animation: "fade" }}
+                      />
+                      <Stack.Screen name="(auth)/sign-in" options={{ presentation: "modal" }} />
+                      <Stack.Screen
+                        name="task/[id]"
+                        options={{
+                          presentation: "transparentModal",
+                          headerShown: false,
+                          title: "Task",
+                          contentStyle: { backgroundColor: "transparent" },
+                          animation: "fade",
+                        }}
+                      />
+                      <Stack.Screen
+                        name="page/[id]"
+                        options={{ headerShown: true, title: "Page" }}
+                      />
+                      <Stack.Screen
+                        name="chat/[id]"
+                        options={{ headerShown: true, title: "Chat" }}
+                      />
+                      <Stack.Screen
+                        name="project/[id]"
+                        options={{ headerShown: true, title: "Project" }}
+                      />
+                    </Stack>
+                  </WorkspaceShell>
+                </PlayerProvider>
               </StorageGate>
             </AuthProvider>
           </AppStateProvider>
@@ -138,6 +164,19 @@ function StorageErrorNotice() {
     >
       <Text style={{ color: "#FFFFFF", fontSize: 14, fontWeight: "600" }}>
         {state.storageError}
+      </Text>
+    </View>
+  );
+}
+
+function SyncUpgradeNotice() {
+  const status = useSyncStatus();
+  if (status !== "upgrade_required") return null;
+  return (
+    <View accessibilityRole="alert" style={{ backgroundColor: "#8B2F26", padding: 12 }}>
+      <Text style={{ color: "#FFFFFF", fontWeight: "600" }}>
+        Update Yatma to sync this workspace. Your local tasks and unsent changes are kept on this
+        device.
       </Text>
     </View>
   );

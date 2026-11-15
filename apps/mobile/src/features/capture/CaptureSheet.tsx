@@ -1,22 +1,26 @@
 import type { ChatStreamItem, Event } from "@yatma/core";
 import { useEffect, useRef, useState } from "react";
-import {
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 
 import { ChangeCard } from "../chat/ChangeCard";
+import {
+  captureThreadTask,
+  createThreadCaptureIdentity,
+  type ThreadCaptureIdentity,
+} from "../../application/threadCapture";
 import { summarizeChangeEvents } from "../chat/changeSummary";
 import { useDictation } from "../dictation";
 import { getAutoSendDictation } from "../settings/autoSendPreference";
 import { useAppStore } from "../../state/atoms";
 import { getSyncMeta, setSyncMeta } from "../../db/database";
-import { findActiveChatTurn, resumeChatTurn, sendChatTurn, stopChatTurn } from "../../sync/chatClient";
+import {
+  findActiveChatTurn,
+  resumeChatTurn,
+  sendChatTurn,
+  stopChatTurn,
+} from "../../sync/chatClient";
 import { getSyncEngine } from "../../sync/engine";
 import { useTheme } from "../../theme/theme";
 import { Composer, IconButton } from "../../ui";
@@ -52,6 +56,8 @@ export function CaptureSheet(props: CaptureSheetProps) {
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [turnId, setTurnId] = useState<string | null>(null);
   const observedTurnIds = useRef(new Set<string>());
+  const captureIdentity = useRef<{ text: string; identity: ThreadCaptureIdentity } | null>(null);
+  const submitting = useRef(false);
 
   function applyTurnItem(item: ChatStreamItem) {
     if (item.kind === "started") {
@@ -87,8 +93,12 @@ export function CaptureSheet(props: CaptureSheetProps) {
         await resumeChatTurn({
           chatId,
           handlers: {
-            onItem: (item) => { if (current) applyTurnItem(item); },
-            onError: (err) => { if (current) setError(err instanceof Error ? err.message : String(err)); },
+            onItem: (item) => {
+              if (current) applyTurnItem(item);
+            },
+            onError: (err) => {
+              if (current) setError(err instanceof Error ? err.message : String(err));
+            },
           },
         });
       } catch (err) {
@@ -101,7 +111,9 @@ export function CaptureSheet(props: CaptureSheetProps) {
       }
     }
     void recover();
-    return () => { current = false; };
+    return () => {
+      current = false;
+    };
   }, [visible]);
 
   async function onMic() {
@@ -138,6 +150,10 @@ export function CaptureSheet(props: CaptureSheetProps) {
   async function onSubmit(explicitText?: string) {
     const text = (explicitText ?? draft).trim();
     if (!text || busy) return;
+    if (!getSyncEngine()) {
+      setError("Connect to send this change, or save it as a task below.");
+      return;
+    }
     onSend?.(text);
     if (explicitText === undefined) setDraft("");
     setBusy(true);
@@ -162,6 +178,31 @@ export function CaptureSheet(props: CaptureSheetProps) {
     }
   }
 
+  async function saveAsTask() {
+    const text = draft.trim();
+    if (!text || submitting.current || busy) return;
+    submitting.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      if (!captureIdentity.current || captureIdentity.current.text !== text)
+        captureIdentity.current = { text, identity: createThreadCaptureIdentity() };
+      await captureThreadTask(
+        store,
+        { title: text, projectId: null },
+        captureIdentity.current.identity,
+      );
+      captureIdentity.current = null;
+      setDraft("");
+      onSend?.(text);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save the task. Try again.");
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  }
+
   async function onStop() {
     if (!activeChatId) return;
     try {
@@ -180,7 +221,9 @@ export function CaptureSheet(props: CaptureSheetProps) {
       setLiveChange(null);
       setUndoDialogOpen(false);
       if (result.skipped.length > 0) {
-        setError(`${result.skipped.length} change${result.skipped.length === 1 ? " was" : "s were"} preserved because they changed later.`);
+        setError(
+          `${result.skipped.length} change${result.skipped.length === 1 ? " was" : "s were"} preserved because they changed later.`,
+        );
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -193,7 +236,9 @@ export function CaptureSheet(props: CaptureSheetProps) {
       try {
         await dictation.cancelRecording();
       } catch {
-        setError("Recording could not stop cleanly. Close and reopen capture before recording again.");
+        setError(
+          "Recording could not stop cleanly. Close and reopen capture before recording again.",
+        );
         return;
       }
     }
@@ -202,116 +247,156 @@ export function CaptureSheet(props: CaptureSheetProps) {
 
   return (
     <>
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={() => void requestClose()}>
-      <View style={styles.modalRoot}>
-        <Pressable
-          style={[styles.backdrop, { backgroundColor: theme.colors.overlay }]}
-          onPress={() => void requestClose()}
-        />
-        <View
-          style={[
-            styles.sheet,
-            {
-              backgroundColor: theme.colors.surface,
-              paddingBottom: Math.max(insets.bottom, 8),
-            },
-          ]}
-        >
-        <View style={[styles.grabber, { backgroundColor: theme.colors.line }]} />
-        <View style={styles.header}>
-          <Text
-            style={{
-              color: theme.colors.ink,
-              fontSize: 18,
-              fontWeight: "700",
-            }}
-          >
-            Capture
-          </Text>
-          <IconButton
-            name="close"
-            accessibilityLabel="Close"
-            color={theme.colors.muted}
+      <Modal
+        visible={visible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => void requestClose()}
+      >
+        <View style={styles.modalRoot}>
+          <Pressable
+            style={[styles.backdrop, { backgroundColor: theme.colors.overlay }]}
             onPress={() => void requestClose()}
           />
-        </View>
-        <Text
-          style={{
-            color: theme.colors.muted,
-            fontSize: theme.type.meta,
-            paddingHorizontal: theme.space.screenX,
-            marginBottom: 8,
-          }}
-        >
-          Add X, move Y to the top, finish Z…
-        </Text>
-        {streaming ? (
-          <Text
-            style={{
-              color: theme.colors.muted,
-              fontSize: theme.type.meta,
-              paddingHorizontal: theme.space.screenX,
-              marginBottom: 8,
-            }}
+          <View
+            style={[
+              styles.sheet,
+              {
+                backgroundColor: theme.colors.surface,
+                paddingBottom: Math.max(insets.bottom, 8),
+              },
+            ]}
           >
-            {streaming}
-          </Text>
-        ) : null}
-        {error ? (
-          <Text
-            style={{
-              color: theme.colors.danger,
-              fontSize: theme.type.meta,
-              paddingHorizontal: theme.space.screenX,
-              marginBottom: 8,
-            }}
-          >
-            {error}
-          </Text>
-        ) : null}
-        {dictation.error ? (
-          <Text style={{ color: theme.colors.danger, fontSize: theme.type.meta, paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
-            {dictation.error}
-          </Text>
-        ) : null}
-        {dictation.recording ? (
-          <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta, paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
-            Recording · {Math.floor(dictation.durationMillis / 1000)}s · tap the microphone to stop
-          </Text>
-        ) : null}
-        {dictation.transcribing ? (
-          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
-            Transcribing recording…
-          </Text>
-        ) : null}
-        {liveChange ? (
-          <View style={{ paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
-            <ChangeCard
-              summary={summarizeChangeEvents(liveChange.events, [
-                { label: liveChange.summaryLabel },
-              ])}
-              onUndo={() => setUndoDialogOpen(true)}
+            <View style={[styles.grabber, { backgroundColor: theme.colors.line }]} />
+            <View style={styles.header}>
+              <Text
+                style={{
+                  color: theme.colors.ink,
+                  fontSize: 18,
+                  fontWeight: "700",
+                }}
+              >
+                Capture
+              </Text>
+              <IconButton
+                name="close"
+                accessibilityLabel="Close"
+                color={theme.colors.muted}
+                onPress={() => void requestClose()}
+              />
+            </View>
+            <Text
+              style={{
+                color: theme.colors.muted,
+                fontSize: theme.type.meta,
+                paddingHorizontal: theme.space.screenX,
+                marginBottom: 8,
+              }}
+            >
+              Add X, move Y to the top, finish Z…
+            </Text>
+            {streaming ? (
+              <Text
+                style={{
+                  color: theme.colors.muted,
+                  fontSize: theme.type.meta,
+                  paddingHorizontal: theme.space.screenX,
+                  marginBottom: 8,
+                }}
+              >
+                {streaming}
+              </Text>
+            ) : null}
+            {error ? (
+              <Text
+                style={{
+                  color: theme.colors.danger,
+                  fontSize: theme.type.meta,
+                  paddingHorizontal: theme.space.screenX,
+                  marginBottom: 8,
+                }}
+              >
+                {error}
+              </Text>
+            ) : null}
+            {dictation.error ? (
+              <Text
+                style={{
+                  color: theme.colors.danger,
+                  fontSize: theme.type.meta,
+                  paddingHorizontal: theme.space.screenX,
+                  marginBottom: 8,
+                }}
+              >
+                {dictation.error}
+              </Text>
+            ) : null}
+            {dictation.recording ? (
+              <Text
+                style={{
+                  color: theme.colors.pine,
+                  fontSize: theme.type.meta,
+                  paddingHorizontal: theme.space.screenX,
+                  marginBottom: 8,
+                }}
+              >
+                Recording · {Math.floor(dictation.durationMillis / 1000)}s · tap the microphone to
+                stop
+              </Text>
+            ) : null}
+            {dictation.transcribing ? (
+              <Text
+                style={{
+                  color: theme.colors.muted,
+                  fontSize: theme.type.meta,
+                  paddingHorizontal: theme.space.screenX,
+                  marginBottom: 8,
+                }}
+              >
+                Transcribing recording…
+              </Text>
+            ) : null}
+            {liveChange ? (
+              <View style={{ paddingHorizontal: theme.space.screenX, marginBottom: 8 }}>
+                <ChangeCard
+                  summary={summarizeChangeEvents(liveChange.events, [
+                    { label: liveChange.summaryLabel },
+                  ])}
+                  onUndo={() => setUndoDialogOpen(true)}
+                />
+              </View>
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Save capture as a task"
+              disabled={busy || !draft.trim()}
+              onPress={() => void saveAsTask()}
+              style={{
+                minHeight: 44,
+                paddingHorizontal: theme.space.screenX,
+                justifyContent: "center",
+              }}
+            >
+              <Text style={{ color: theme.colors.pine, fontWeight: "600" }}>Save as task</Text>
+            </Pressable>
+            <Composer
+              value={draft}
+              onChangeText={setDraft}
+              placeholder="Dictate or type a change…"
+              onSend={() => void onSubmit()}
+              onMic={() => void onMic()}
+              busy={busy || dictation.transcribing}
+              onStop={busy ? () => void onStop() : undefined}
+              autoFocus
             />
           </View>
-        ) : null}
-          <Composer
-            value={draft}
-            onChangeText={setDraft}
-            placeholder="Dictate or type a change…"
-            onSend={() => void onSubmit()}
-            onMic={() => void onMic()}
-            busy={busy || dictation.transcribing}
-            onStop={busy ? () => void onStop() : undefined}
-            autoFocus
-          />
         </View>
-      </View>
-    </Modal>
-    <UndoReasonDialog
-      visible={undoDialogOpen}
-      onCancel={() => setUndoDialogOpen(false)}
-      onSubmit={onUndo}
-    />
+      </Modal>
+      <UndoReasonDialog
+        visible={undoDialogOpen}
+        onCancel={() => setUndoDialogOpen(false)}
+        onSubmit={onUndo}
+      />
     </>
   );
 }

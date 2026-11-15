@@ -277,6 +277,25 @@ Output a prepared queue containing only the explicitly chosen break
 Outcome the person retains control over how recovery time is planned
 # Facades: DS1, DS3; Tasks: DP5, DP6
 
+Scenario: DSP-28 Concurrent assembly and tomorrow transfers converge
+Given two clients independently prepare the same local day and defer the same task while offline
+When their unique event streams merge in either delivery order with duplicate delivery
+Then semantic day and task origins leave one playable task entry per day
+And later manual order and allocation edits remain intact
+And source time remains on the source day
+Output one converged commitment with retained manual edits and source time
+Outcome the daily plan survives independently prepared offline changes
+# Facades: DS1, DS3; Tasks: N01, N06, N08, N12, N15
+
+Scenario: DSP-29 Dictation temporarily owns the shared audio session
+Given ambient audio is enabled and a work interval is running
+When dictation starts and then stops or is interrupted
+Then ambient playback pauses during recording and restores the current media preference afterward
+And the selected task, interval boundaries, queue and allocation do not change
+Output coordinated audio ownership with no work mutation
+Outcome voice capture and ambient media can share a work session
+# Facades: DS2; Tasks: N01, N09, N14, N16
+
 System Outputs
 3 opening blocks followed by the existing work queue
 And 1 committed daily reorder
@@ -305,6 +324,8 @@ And a manually adjusted daily stack with separate work and break identities
 And an idempotent future-only break change set
 And an independent media preference change with no work mutation
 And a prepared queue containing only the explicitly chosen break
+And one converged commitment with retained manual edits and source time
+And coordinated audio ownership with no work mutation
 
 System Outcomes
 the person can pattern the start of the day without scripting every later task
@@ -334,3 +355,5 @@ And the person can adapt the rhythm while working without rebuilding the day
 And automatic preparation continues to help without fighting the person's edits
 And the person can choose a focus environment without interrupting the session
 And the person retains control over how recovery time is planned
+And the daily plan survives independently prepared offline changes
+And voice capture and ambient media can share a work session

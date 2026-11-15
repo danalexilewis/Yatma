@@ -1,5 +1,5 @@
 import { dedupeAndSortEvents, type FoldedEntities } from "./fold.ts";
-import { ChatId as ChatIdSchema, type TaskId } from "./ids.ts";
+import { ChatId as ChatIdSchema, type TaskId, type ChatId } from "./ids.ts";
 import { isOpenTask, sortTasksByPosition } from "./rules.ts";
 import type { ChatMessage, Task } from "./schemas.ts";
 
@@ -115,4 +115,107 @@ export function groupThreadTasks(
   }
   for (const heading of headings) if (!groups.has(heading)) groups.set(heading, []);
   return [...groups].map(([heading, members]) => ({ heading, tasks: members }));
+}
+
+export type ThreadMessage = {
+  readonly chatId: ChatId;
+  readonly message: ChatMessage;
+};
+export type ThreadMessageCursor = {
+  readonly at: string;
+  readonly chatId: string;
+  readonly messageId: string;
+};
+export type ThreadMessageWindow = {
+  readonly messages: readonly ThreadMessage[];
+  readonly hasOlder: boolean;
+  readonly hasNewer: boolean;
+};
+
+export const THREAD_PAGE_SIZE = 50;
+export const THREAD_MAX_MESSAGES = 150;
+
+/** Durable assistant identity shared with the turn writer and transient reply renderer. */
+export function assistantMessageId(turnId: string): string {
+  return `msg_${turnId}_assistant`;
+}
+
+/** Encodes tuple identities without delimiter collisions. */
+export function threadMessageKey(entry: ThreadMessage): string {
+  return JSON.stringify([entry.chatId, entry.message.id]);
+}
+
+export function threadMessageCursor(entry: ThreadMessage): ThreadMessageCursor {
+  return { at: entry.message.at, chatId: entry.chatId, messageId: entry.message.id };
+}
+
+/** All conversation messages, including legacy chats, without synthetic completion notices. */
+export function selectThreadMessages(state: Pick<FoldedEntities, "chats">): ThreadMessage[] {
+  return reconcileThreadMessages(
+    [...state.chats.values()].flatMap((chat) =>
+      chat.messages.map((message) => ({ chatId: chat.id, message })),
+    ),
+  );
+}
+
+/** One lexicographic comparator serves both paging directions and equal timestamps. */
+export function compareThreadMessageCursors(
+  left: ThreadMessageCursor,
+  right: ThreadMessageCursor,
+): number {
+  for (const field of ["at", "chatId", "messageId"] as const) {
+    if (left[field] < right[field]) return -1;
+    if (left[field] > right[field]) return 1;
+  }
+  return 0;
+}
+
+/** Pages the hydrated collection while retaining at most 150 messages and the visible anchor. */
+export function pageThreadMessages(
+  all: readonly ThreadMessage[],
+  retained: readonly ThreadMessage[],
+  direction: "latest" | "older" | "newer",
+  anchorKey?: string,
+): ThreadMessageWindow {
+  let start = Math.max(0, all.length - THREAD_PAGE_SIZE);
+  let end = all.length;
+  if (direction !== "latest" && retained.length) {
+    const first = all.findIndex(
+      (message) => threadMessageKey(message) === threadMessageKey(retained[0]!),
+    );
+    const last = all.findIndex(
+      (message) => threadMessageKey(message) === threadMessageKey(retained.at(-1)!),
+    );
+    if (first >= 0 && last >= 0) {
+      start = direction === "older" ? Math.max(0, first - THREAD_PAGE_SIZE) : first;
+      end = direction === "newer" ? Math.min(all.length, last + 1 + THREAD_PAGE_SIZE) : last + 1;
+    }
+  }
+  if (end - start > THREAD_MAX_MESSAGES) {
+    const anchor = anchorKey
+      ? all.findIndex((message) => threadMessageKey(message) === anchorKey)
+      : -1;
+    if (direction === "older") {
+      if (anchor >= start + THREAD_MAX_MESSAGES && anchor < end)
+        start = anchor - THREAD_MAX_MESSAGES + 1;
+      end = start + THREAD_MAX_MESSAGES;
+    } else {
+      if (anchor >= start && anchor < end - THREAD_MAX_MESSAGES) end = anchor + THREAD_MAX_MESSAGES;
+      start = end - THREAD_MAX_MESSAGES;
+    }
+  }
+  return { messages: all.slice(start, end), hasOlder: start > 0, hasNewer: end < all.length };
+}
+
+/** Replaces only the matching transient identity; equal text is never a message identity. */
+export function reconcileThreadMessages(
+  messages: readonly ThreadMessage[],
+  transient?: ThreadMessage,
+): ThreadMessage[] {
+  const byIdentity = new Map(messages.map((message) => [threadMessageKey(message), message]));
+  if (transient && !byIdentity.has(threadMessageKey(transient)))
+    byIdentity.set(threadMessageKey(transient), transient);
+  return [...byIdentity.values()].toSorted((left, right) =>
+    compareThreadMessageCursors(threadMessageCursor(left), threadMessageCursor(right)),
+  );
 }

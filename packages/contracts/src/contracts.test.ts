@@ -2,7 +2,7 @@ import { railError } from "@eddy-works/never-rest";
 import { createDispatcher, type LocalHandlers } from "@eddy-works/never-rest/local";
 import { checkContractOutputs, createTestClient } from "@eddy-works/never-rest/testing";
 import { describe, expect, it } from "@effect/vitest";
-import { DeviceId, EventId, TaskId, type Event } from "@yatma/core";
+import { ChatId, DeviceId, EventId, TaskId, type Event } from "@yatma/core";
 import { err, ok } from "neverthrow";
 
 import { healthContract } from "./health.ts";
@@ -25,6 +25,40 @@ const event: Event = {
 };
 
 describe("never-rest contracts", () => {
+  it("preserves the device planning calendar and rejects invalid zones before turn admission", async () => {
+    const received: unknown[] = [];
+    const handlers: LocalHandlers<typeof turnContract, undefined> = {
+      startTurn: ({ body }) => {
+        received.push(body);
+        return ok({
+          turnId: "turn_1",
+          chatId: ChatId.make("c_ABCDEFGH"),
+          batchId: "batch_1",
+          status: "queued",
+        });
+      },
+      getTurn: () => err(railError("not_found", "No turn")),
+      stopTurn: () => ok({ ok: true }),
+    };
+    const dispatcher = createDispatcher(turnContract, handlers, { origin: "yatma-turn" });
+    const body = {
+      eventSchemaVersion: 2,
+      requestId: "r_1",
+      messageId: "m_1",
+      projectId: null,
+      text: "Plan today",
+      events: [],
+      planning: { date: "2026-11-11", timezone: "Pacific/Auckland" },
+    };
+    const accepted = await dispatcher.dispatch("startTurn", { body });
+    expect(accepted.isOk()).toBe(true);
+    expect(received).toEqual([body]);
+    const rejected = await dispatcher.dispatch("startTurn", {
+      body: { ...body, planning: { ...body.planning, timezone: "Mars/Olympus" } },
+    });
+    expect(rejected.isErr()).toBe(true);
+    expect(received).toHaveLength(1);
+  });
   it("keeps Effect-schema outputs stable through JSON transport", async () => {
     const health = { ok: true as const, service: "yatma" as const, stage: "dev" };
     const healthResult = await checkContractOutputs(healthContract, {
@@ -42,7 +76,12 @@ describe("never-rest contracts", () => {
         status: "queued",
       },
       getTurn: {
-        receipt: { turnId: "turn_1", chatId: "c_ABCDEFGH", batchId: "batch_1", status: "completed" },
+        receipt: {
+          turnId: "turn_1",
+          chatId: ChatId.make("c_ABCDEFGH"),
+          batchId: "batch_1",
+          status: "completed",
+        },
         resultText: "Done",
         batches: [],
         error: null,

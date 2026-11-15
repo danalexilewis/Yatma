@@ -35,103 +35,169 @@ function startInput(requestId: string, text: string): TurnStartInput {
 }
 
 describe("worker turn supervisor", () => {
-  it.effect("deduplicates request identity and persists scripted result", () =>
-    withStore(Effect.gen(function* () {
-      const hub = yield* Mutations.makeCommitHub;
-      const mutations = Mutations.makeMutationService(hub);
-      const gateway = ModelGateway.makeScriptedGateway([
-        { text: "First reply", tokens: 17, toolCalls: [] },
-        { text: "Second reply", tokens: 9, toolCalls: [] },
-      ]);
-      const supervisor = yield* Supervisor.makeSupervisor({
-        sqlLayer,
-        mutations,
-        model: "scripted",
-        openRouterKey: "scripted",
-        gateway,
-      });
+  it.effect(
+    "retains the device planning day through admission and fences conflicting calendar retries",
+    () =>
+      withStore(
+        Effect.gen(function* () {
+          const hub = yield* Mutations.makeCommitHub;
+          let modelContext = "";
+          const gateway: ModelGateway.ModelGateway = {
+            stream: (messages) => {
+              modelContext = messages.map((message) => message.content).join("\n");
+              return Stream.make(
+                { type: "text", text: "Let's choose the day together." },
+                { type: "usage", tokens: 3 },
+              );
+            },
+          };
+          const supervisor = yield* Supervisor.makeSupervisor({
+            sqlLayer,
+            mutations: Mutations.makeMutationService(hub),
+            model: "scripted",
+            openRouterKey: "scripted",
+            gateway,
+          });
+          const request = {
+            ...startInput("calendar-request", "Help me plan"),
+            planning: { date: "2026-11-11", timezone: "Pacific/Auckland" },
+          };
+          const receipt = yield* supervisor.start(request);
+          const retry = yield* supervisor.start(request);
+          expect(retry.turnId).toBe(receipt.turnId);
+          const conflict = yield* Effect.flip(
+            supervisor.start({ ...request, planning: { ...request.planning, date: "2026-11-12" } }),
+          );
+          expect(conflict.message).toBe("turn_request_conflict");
+          for (let attempt = 0; attempt < 200; attempt += 1) yield* Effect.yieldNow;
+          expect(modelContext).toContain("2026-11-11");
+          expect(modelContext).toContain("Pacific/Auckland");
+          expect((yield* supervisor.get(receipt.turnId))?.receipt.status).toBe("completed");
+        }),
+      ),
+  );
+  (it.effect("deduplicates request identity and persists scripted result", () =>
+    withStore(
+      Effect.gen(function* () {
+        const hub = yield* Mutations.makeCommitHub;
+        const mutations = Mutations.makeMutationService(hub);
+        const gateway = ModelGateway.makeScriptedGateway([
+          { text: "First reply", tokens: 17, toolCalls: [] },
+          { text: "Second reply", tokens: 9, toolCalls: [] },
+        ]);
+        const supervisor = yield* Supervisor.makeSupervisor({
+          sqlLayer,
+          mutations,
+          model: "scripted",
+          openRouterKey: "scripted",
+          gateway,
+        });
 
-      const first = yield* supervisor.start(startInput("request-a", "Repeat this"));
-      const retry = yield* supervisor.start(startInput("request-a", "Repeat this"));
-      expect(retry.turnId).toBe(first.turnId);
-      expect(retry.chatId).toBe(first.chatId);
+        const first = yield* supervisor.start(startInput("request-a", "Repeat this"));
+        const retry = yield* supervisor.start(startInput("request-a", "Repeat this"));
+        expect(retry.turnId).toBe(first.turnId);
+        expect(retry.chatId).toBe(first.chatId);
 
-      const second = yield* supervisor.start(startInput("request-b", "Repeat this"));
-      expect(second.turnId).not.toBe(first.turnId);
+        const second = yield* supervisor.start(startInput("request-b", "Repeat this"));
+        expect(second.turnId).not.toBe(first.turnId);
 
-      for (let attempt = 0; attempt < 200; attempt += 1) yield* Effect.yieldNow;
-      const sql = yield* SqlClient.SqlClient;
-      const firstRows = yield* sql<{ readonly status: string; readonly result_text: string | null }>`SELECT status, result_text FROM agent_turns WHERE turn_id = ${first.turnId}`;
-      const secondRows = yield* sql<{ readonly status: string; readonly result_text: string | null }>`SELECT status, result_text FROM agent_turns WHERE turn_id = ${second.turnId}`;
-      expect(firstRows[0]?.status).toBe("completed");
-      expect(firstRows[0]?.result_text).toBe("First reply");
-      expect(secondRows[0]?.status).toBe("completed");
-      expect(secondRows[0]?.result_text).toBe("Second reply");
-      const firstFrames = yield* sql<{ readonly seq: number; readonly item: string }>`SELECT seq, item FROM agent_turn_frames WHERE turn_id = ${first.turnId} ORDER BY seq`;
-      const textFrame = firstFrames.find((frame) => JSON.parse(frame.item).kind === "text_delta");
-      const doneFrame = firstFrames.find((frame) => JSON.parse(frame.item).kind === "done");
-      expect(JSON.parse(textFrame?.item ?? "null").text).toBe("First reply");
-      expect((textFrame?.seq ?? Infinity) < (doneFrame?.seq ?? -Infinity)).toBe(true);
-      expect(gateway.remaining()).toBe(0);
-    }))),
-
-  it.effect("publishes text while the gateway is still open", () =>
-    withStore(Effect.gen(function* () {
-      const hub = yield* Mutations.makeCommitHub;
-      const gate = yield* Deferred.make<void>();
-      let providerFinished = false;
-      const gateway: ModelGateway.ModelGateway = {
-        stream: () => Stream.concat(
-          Stream.make({ type: "text", text: "Early text" }),
-          Stream.fromEffect(Deferred.await(gate).pipe(
-            Effect.tap(() => Effect.sync(() => { providerFinished = true; })),
-            Effect.as({ type: "usage" as const, tokens: 5 }),
-          )),
-        ),
-      };
-      const supervisor = yield* Supervisor.makeSupervisor({
-        sqlLayer,
-        mutations: Mutations.makeMutationService(hub),
-        model: "scripted",
-        openRouterKey: "scripted",
-        gateway,
-      });
-      const receipt = yield* supervisor.start(startInput("request-gated", "Stream this"));
-      const textFrame = yield* Stream.runHead(
-        supervisor.observe(receipt.turnId, 1).pipe(
-          Stream.filter((frame) => frame.item.kind === "text_delta"),
-        ),
-      );
-      expect(Option.isSome(textFrame)).toBe(true);
-      if (Option.isSome(textFrame) && textFrame.value.item.kind === "text_delta") {
-        expect(textFrame.value.item.text).toBe("Early text");
-      }
-      expect(providerFinished).toBe(false);
-      yield* Deferred.succeed(gate, undefined);
-      for (let attempt = 0; attempt < 200; attempt += 1) yield* Effect.yieldNow;
-      const sql = yield* SqlClient.SqlClient;
-      const rows = yield* sql<{ readonly status: string }>`SELECT status FROM agent_turns WHERE turn_id = ${receipt.turnId}`;
-      expect(rows[0]?.status).toBe("completed");
-      const completed = yield* supervisor.get(receipt.turnId);
-      expect(completed?.resultText).toBe("Early text");
-    }))),
-
-  it.effect("marks queued or running turns interrupted during restart recovery", () =>
-    withStore(Effect.gen(function* () {
-      const now = new Date().toISOString();
-      const chatId = ChatId.make("c_REC0VRY1");
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`INSERT INTO agent_turns(turn_id, request_id, chat_id, batch_id, request_signature, status, input, created_at, updated_at)
+        for (let attempt = 0; attempt < 200; attempt += 1) yield* Effect.yieldNow;
+        const sql = yield* SqlClient.SqlClient;
+        const firstRows = yield* sql<{
+          readonly status: string;
+          readonly result_text: string | null;
+        }>`SELECT status, result_text FROM agent_turns WHERE turn_id = ${first.turnId}`;
+        const secondRows = yield* sql<{
+          readonly status: string;
+          readonly result_text: string | null;
+        }>`SELECT status, result_text FROM agent_turns WHERE turn_id = ${second.turnId}`;
+        expect(firstRows[0]?.status).toBe("completed");
+        expect(firstRows[0]?.result_text).toBe("First reply");
+        expect(secondRows[0]?.status).toBe("completed");
+        expect(secondRows[0]?.result_text).toBe("Second reply");
+        const firstFrames = yield* sql<{
+          readonly seq: number;
+          readonly item: string;
+        }>`SELECT seq, item FROM agent_turn_frames WHERE turn_id = ${first.turnId} ORDER BY seq`;
+        const textFrame = firstFrames.find((frame) => JSON.parse(frame.item).kind === "text_delta");
+        const doneFrame = firstFrames.find((frame) => JSON.parse(frame.item).kind === "done");
+        expect(JSON.parse(textFrame?.item ?? "null").text).toBe("First reply");
+        expect((textFrame?.seq ?? Infinity) < (doneFrame?.seq ?? -Infinity)).toBe(true);
+        expect(gateway.remaining()).toBe(0);
+      }),
+    ),
+  ),
+    it.effect("publishes text while the gateway is still open", () =>
+      withStore(
+        Effect.gen(function* () {
+          const hub = yield* Mutations.makeCommitHub;
+          const gate = yield* Deferred.make<void>();
+          let providerFinished = false;
+          const gateway: ModelGateway.ModelGateway = {
+            stream: () =>
+              Stream.concat(
+                Stream.make({ type: "text", text: "Early text" }),
+                Stream.fromEffect(
+                  Deferred.await(gate).pipe(
+                    Effect.tap(() =>
+                      Effect.sync(() => {
+                        providerFinished = true;
+                      }),
+                    ),
+                    Effect.as({ type: "usage" as const, tokens: 5 }),
+                  ),
+                ),
+              ),
+          };
+          const supervisor = yield* Supervisor.makeSupervisor({
+            sqlLayer,
+            mutations: Mutations.makeMutationService(hub),
+            model: "scripted",
+            openRouterKey: "scripted",
+            gateway,
+          });
+          const receipt = yield* supervisor.start(startInput("request-gated", "Stream this"));
+          const textFrame = yield* Stream.runHead(
+            supervisor
+              .observe(receipt.turnId, 1)
+              .pipe(Stream.filter((frame) => frame.item.kind === "text_delta")),
+          );
+          expect(Option.isSome(textFrame)).toBe(true);
+          if (Option.isSome(textFrame) && textFrame.value.item.kind === "text_delta") {
+            expect(textFrame.value.item.text).toBe("Early text");
+          }
+          expect(providerFinished).toBe(false);
+          yield* Deferred.succeed(gate, undefined);
+          for (let attempt = 0; attempt < 200; attempt += 1) yield* Effect.yieldNow;
+          const sql = yield* SqlClient.SqlClient;
+          const rows = yield* sql<{
+            readonly status: string;
+          }>`SELECT status FROM agent_turns WHERE turn_id = ${receipt.turnId}`;
+          expect(rows[0]?.status).toBe("completed");
+          const completed = yield* supervisor.get(receipt.turnId);
+          expect(completed?.resultText).toBe("Early text");
+        }),
+      ),
+    ),
+    it.effect("marks queued or running turns interrupted during restart recovery", () =>
+      withStore(
+        Effect.gen(function* () {
+          const now = new Date().toISOString();
+          const chatId = ChatId.make("c_REC0VRY1");
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO agent_turns(turn_id, request_id, chat_id, batch_id, request_signature, status, input, created_at, updated_at)
         VALUES ('turn_recover', 'request_recover', ${chatId}, 'batch_recover', '{}', 'running', '{}', ${now}, ${now})`;
-      const hub = yield* Mutations.makeCommitHub;
-      const supervisor = yield* Supervisor.makeSupervisor({
-        sqlLayer,
-        mutations: Mutations.makeMutationService(hub),
-        model: "scripted",
-        openRouterKey: null,
-      });
-      yield* supervisor.recover;
-      const recovered = yield* supervisor.get("turn_recover");
-      expect(recovered?.receipt.status).toBe("interrupted");
-    })));
+          const hub = yield* Mutations.makeCommitHub;
+          const supervisor = yield* Supervisor.makeSupervisor({
+            sqlLayer,
+            mutations: Mutations.makeMutationService(hub),
+            model: "scripted",
+            openRouterKey: null,
+          });
+          yield* supervisor.recover;
+          const recovered = yield* supervisor.get("turn_recover");
+          expect(recovered?.receipt.status).toBe("interrupted");
+        }),
+      ),
+    ));
 });

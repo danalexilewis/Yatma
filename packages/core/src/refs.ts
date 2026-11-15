@@ -2,35 +2,43 @@
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import type { ChatId, PageId, TaskId } from "./ids.ts";
-import { ChatId as ChatIdSchema, PageId as PageIdSchema, TaskId as TaskIdSchema } from "./ids.ts";
+import type { ChatId, PageId, ProjectId, TaskId } from "./ids.ts";
+import {
+  ChatId as ChatIdSchema,
+  PageId as PageIdSchema,
+  ProjectId as ProjectIdSchema,
+  TaskId as TaskIdSchema,
+} from "./ids.ts";
 
-export type RefKind = "task" | "page" | "chat";
+export type RefKind = "task" | "page" | "chat" | "project";
 
 export type EntityRef =
   | { readonly kind: "task"; readonly id: TaskId; readonly label: string }
   | { readonly kind: "page"; readonly id: PageId; readonly label: string }
+  | { readonly kind: "project"; readonly id: ProjectId; readonly label: string }
   | { readonly kind: "chat"; readonly id: ChatId; readonly label: string };
 
 export type ParsedRef =
   | { readonly ok: true; readonly ref: EntityRef }
   | { readonly ok: false; readonly raw: string; readonly reason: "unknown_scheme" | "invalid_id" };
 
-/** Markdown link target: `task:t_…`, `page:pg_…`, or `chat:c_…`. */
-const REF_HREF = /^(task|page|chat):(.+)$/;
+/** Markdown links retain typed entity identity even when the title changes. */
+const REF_HREF = /^(task|page|chat|project):(.+)$/;
 
 /** Inline markdown links: `[label](task:t_x)`. */
-const MARKDOWN_LINK = /\[([^\]]*)\]\((task|page|chat):([^)\s]+)\)/g;
+const MARKDOWN_LINK = /\[((?:\\.|[^\]\\])*)\]\((task|page|chat|project):([^)\s]+)\)/g;
 
 const decodeTaskId = Schema.decodeUnknownOption(TaskIdSchema);
 const decodePageId = Schema.decodeUnknownOption(PageIdSchema);
 const decodeChatId = Schema.decodeUnknownOption(ChatIdSchema);
+const decodeProjectId = Schema.decodeUnknownOption(ProjectIdSchema);
 
 /**
  * Parse a single ref href (`task:t_…`). Unknown ids fail closed so invented
  * model ids render as plain text in the UI.
  */
 export function parseRefHref(href: string, label: string = ""): ParsedRef {
+  label = label.replace(/\\([\\\[\]])/g, "$1");
   const match = REF_HREF.exec(href.trim());
   if (!match) return { ok: false, raw: href, reason: "unknown_scheme" };
   const kind = match[1] as RefKind;
@@ -44,6 +52,11 @@ export function parseRefHref(href: string, label: string = ""): ParsedRef {
     const id = decodePageId(idPart);
     if (Option.isNone(id)) return { ok: false, raw: href, reason: "invalid_id" };
     return { ok: true, ref: { kind: "page", id: id.value, label } };
+  }
+  if (kind === "project") {
+    const id = decodeProjectId(idPart);
+    if (Option.isNone(id)) return { ok: false, raw: href, reason: "invalid_id" };
+    return { ok: true, ref: { kind: "project", id: id.value, label } };
   }
   const id = decodeChatId(idPart);
   if (Option.isNone(id)) return { ok: false, raw: href, reason: "invalid_id" };
@@ -73,7 +86,7 @@ export function classifyRefPlacement(
 ): "chip" | "card" | "list_item" {
   const lines = text.split("\n");
   const line = (lines[lineIndex] ?? "").trim();
-  const onlyLink = /^\[([^\]]*)\]\((task|page|chat):([^)\s]+)\)$/.test(line);
+  const onlyLink = /^\[([^\]]*)\]\((task|page|chat|project):([^)\s]+)\)$/.test(line);
   if (!onlyLink) return "chip";
   const prev = (lines[lineIndex - 1] ?? "").trim();
   const next = (lines[lineIndex + 1] ?? "").trim();
@@ -86,5 +99,6 @@ export function classifyRefPlacement(
 
 /** Format a live ref link the model can emit. */
 export function formatRef(kind: RefKind, id: string, label: string): string {
-  return `[${label}](${kind}:${id})`;
+  const escaped = label.replace(/\\/g, "\\\\").replace(/[\[\]]/g, "\\$&");
+  return `[${escaped}](${kind}:${id})`;
 }

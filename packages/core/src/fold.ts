@@ -18,6 +18,18 @@ import { Event as EventSchema } from "./events.ts";
 import type { ChatId, PageId, ProjectId, TaskId } from "./ids.ts";
 import type { Chat, Page, Project, Task } from "./schemas.ts";
 
+import { applyStackEvent, copyStackMaps, reconcileTerminalIntervals } from "./stackFold.ts";
+import type {
+  Day,
+  DayEntry,
+  WorkInterval,
+  StackTemplate,
+  StackPreferences,
+} from "./stackSchemas.ts";
+
+import type { ReviewItem } from "./review.ts";
+import { applyReviewEvent } from "./reviewPolicy.ts";
+
 const decodeEvent = Schema.decodeUnknownOption(EventSchema);
 
 export type ParsedEventLine =
@@ -39,8 +51,11 @@ export function parseEventLine(line: string): ParsedEventLine {
 }
 
 export function compareEvents(a: Event, b: Event): number {
-  if (a.at < b.at) return -1;
-  if (a.at > b.at) return 1;
+  const aMs = Date.parse(a.at);
+  const bMs = Date.parse(b.at);
+  if (Number.isFinite(aMs) && Number.isFinite(bMs) && aMs !== bMs) return aMs - bMs;
+  if ((!Number.isFinite(aMs) || !Number.isFinite(bMs)) && a.at !== b.at)
+    return a.at < b.at ? -1 : 1;
   if (a.id < b.id) return -1;
   if (a.id > b.id) return 1;
   return 0;
@@ -62,6 +77,12 @@ function applyTaskCreated(tasks: Map<TaskId, Task>, event: TaskCreatedEvent): vo
     title: event.title,
     tags: event.tags ?? [],
     notes: event.notes ?? "",
+    todos: event.todos ?? [],
+    estimateMinutes: event.estimateMinutes ?? null,
+    place: event.place ?? null,
+    mentalMode: event.mentalMode ?? null,
+    priority: event.priority ?? null,
+    scheduledDate: event.scheduledDate ?? null,
     dueDate: event.dueDate ?? null,
     status: event.status,
     quadrant: event.quadrant,
@@ -87,6 +108,14 @@ function applyTaskUpdated(tasks: Map<TaskId, Task>, event: TaskUpdatedEvent): vo
     title: set.title ?? existing.title,
     tags: set.tags ?? existing.tags ?? [],
     notes: set.notes ?? existing.notes,
+    todos: set.todos ?? existing.todos ?? [],
+    estimateMinutes:
+      set.estimateMinutes !== undefined ? set.estimateMinutes : (existing.estimateMinutes ?? null),
+    place: set.place !== undefined ? set.place : (existing.place ?? null),
+    mentalMode: set.mentalMode !== undefined ? set.mentalMode : (existing.mentalMode ?? null),
+    priority: set.priority !== undefined ? set.priority : (existing.priority ?? null),
+    scheduledDate:
+      set.scheduledDate !== undefined ? set.scheduledDate : (existing.scheduledDate ?? null),
     dueDate: set.dueDate !== undefined ? set.dueDate : existing.dueDate,
     status: nextStatus,
     quadrant: set.quadrant !== undefined ? set.quadrant : existing.quadrant,
@@ -233,6 +262,12 @@ function applyChatUpdated(chats: Map<ChatId, Chat>, event: ChatUpdatedEvent): vo
 }
 
 export type FoldedEntities = {
+  readonly reviewItems: ReadonlyMap<string, ReviewItem>;
+  readonly days: ReadonlyMap<string, Day>;
+  readonly dayEntries: ReadonlyMap<string, DayEntry>;
+  readonly workIntervals: ReadonlyMap<string, WorkInterval>;
+  readonly stackTemplates: ReadonlyMap<string, StackTemplate>;
+  readonly stackPreferences: ReadonlyMap<string, StackPreferences>;
   readonly projects: ReadonlyMap<ProjectId, Project>;
   readonly tasks: ReadonlyMap<TaskId, Task>;
   readonly pages: ReadonlyMap<PageId, Page>;
@@ -243,6 +278,8 @@ export type FoldedEntities = {
 
 function emptyFolded(skippedLines = 0): FoldedEntities {
   return {
+    ...copyStackMaps(),
+    reviewItems: new Map(),
     projects: new Map(),
     tasks: new Map(),
     pages: new Map(),
@@ -259,8 +296,12 @@ export function foldEvents(events: readonly Event[]): FoldedEntities {
   const tasks = new Map<TaskId, Task>();
   const pages = new Map<PageId, Page>();
   const chats = new Map<ChatId, Chat>();
+  const stack = copyStackMaps();
+  const reviewItems = new Map<string, ReviewItem>();
 
   for (const event of ordered) {
+    applyStackEvent(stack, event);
+    applyReviewEvent(reviewItems, event);
     switch (event.type) {
       case "project.created":
         applyProjectCreated(projects, event);
@@ -292,7 +333,8 @@ export function foldEvents(events: readonly Event[]): FoldedEntities {
     }
   }
 
-  return { projects, tasks, pages, chats, events: ordered, skippedLines: 0 };
+  reconcileTerminalIntervals(stack, ordered);
+  return { ...stack, reviewItems, projects, tasks, pages, chats, events: ordered, skippedLines: 0 };
 }
 
 /** Fold JSONL lines into entity state. Unknown/invalid lines are skipped. */

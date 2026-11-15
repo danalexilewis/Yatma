@@ -3,6 +3,9 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
+import { DailyCommand } from "./dailyCommands.ts";
+import { planDailyCommand, taskTerminalDrafts } from "./dailyPolicy.ts";
+import { applyStackEvent, copyStackMaps } from "./stackFold.ts";
 import type { Event } from "./events.ts";
 import { Event as EventSchema } from "./events.ts";
 import type { BatchId, ChatId, EventId, PageId, ProjectId, TaskId } from "./ids.ts";
@@ -28,6 +31,9 @@ import {
   TaskTags,
   Title,
 } from "./schemas.ts";
+
+import { ReviewCommand } from "./review.ts";
+import { applyReviewEvent, planReviewCommand } from "./reviewPolicy.ts";
 
 const PageCreateInput = Schema.Struct({
   projectId: Schema.optional(Schema.NullOr(ProjectIdSchema)),
@@ -56,6 +62,8 @@ const ChatUpdateInput = Schema.Struct({
   headings: Schema.optional(TaskTags),
 });
 const BatchCommandSchema = Schema.Union([
+  DailyCommand,
+  ReviewCommand,
   Schema.Struct({
     type: Schema.Literal("task.create"),
     taskId: TaskIdSchema,
@@ -91,6 +99,8 @@ const BatchCommandSchema = Schema.Union([
 
 /** One atomic user or agent command, with IDs allocated by its caller. */
 export type BatchCommand =
+  | ReviewCommand
+  | DailyCommand
   | {
       readonly type: "task.create";
       readonly taskId: TaskId;
@@ -146,7 +156,9 @@ export type PlanBatchDraft = {
   readonly finalSnapshot: BatchSnapshot;
 };
 export type PlanBatchContext = {
+  readonly reason?: string;
   readonly actor: Actor;
+  readonly now?: string;
   readonly batchId?: BatchId;
   readonly undoes?: BatchId;
 };
@@ -202,6 +214,8 @@ export function planBatch(
   const tasks = new Map(snapshot.tasks);
   const pages = new Map(snapshot.pages);
   const chats = new Map(snapshot.chats);
+  const stack = copyStackMaps(snapshot);
+  const reviewItems = new Map(snapshot.reviewItems);
   const drafts: EventDraft[] = [];
   const noops: { commandIndex: number; reason: "unchanged" }[] = [];
 
@@ -213,6 +227,62 @@ export function planBatch(
         failure("invalid_command", index, "Command failed schema validation", "command"),
       );
     const command = parsedCommand.value as BatchCommand;
+    const reviewCommand = Schema.decodeUnknownOption(ReviewCommand)(command);
+    if (Option.isSome(reviewCommand)) {
+      const planned = planReviewCommand(
+        { projects, tasks, pages, chats, ...stack, reviewItems },
+        reviewCommand.value,
+        context,
+      );
+      if (Result.isFailure(planned))
+        return Result.fail({ ...planned.failure, commandIndex: index });
+      if (!planned.success.length) noops.push({ commandIndex: index, reason: "unchanged" });
+      for (const draft of planned.success) {
+        const staged = { ...draft, id: ZERO_ID, at: context.now ?? INVALID_AT } as Event;
+        if (Option.isNone(Schema.decodeUnknownOption(EventSchema)(staged)))
+          return Result.fail(
+            failure("invalid_command", index, "Planned review event failed validation"),
+          );
+        drafts.push(draft);
+        applyReviewEvent(reviewItems, staged);
+      }
+      continue;
+    }
+    const dailyCommand = Schema.decodeUnknownOption(DailyCommand)(command);
+    if (Option.isSome(dailyCommand)) {
+      const planned = planDailyCommand(
+        { projects, tasks, pages, chats, ...stack },
+        dailyCommand.value,
+        context,
+      );
+      if (Result.isFailure(planned))
+        return Result.fail({ ...planned.failure, commandIndex: index });
+      if (planned.success.length === 0) noops.push({ commandIndex: index, reason: "unchanged" });
+      for (const draft of planned.success) {
+        if (
+          Option.isNone(
+            Schema.decodeUnknownOption(EventSchema)({
+              ...draft,
+              id: ZERO_ID,
+              at: context.now ?? INVALID_AT,
+            }),
+          )
+        )
+          return Result.fail(
+            failure(
+              "invalid_command",
+              index,
+              "Planned daily event failed schema validation",
+              "event",
+            ),
+          );
+        drafts.push(draft);
+        const staged = { ...draft, id: ZERO_ID, at: context.now ?? INVALID_AT } as Event;
+        applyStackEvent(stack, staged);
+        stageEvent(staged, projects, tasks, pages, chats, context.actor);
+      }
+      continue;
+    }
     let event: Event | null = null;
     switch (command.type) {
       case "task.create": {
@@ -246,6 +316,12 @@ export function planBatch(
           title: planned.success.title,
           tags: [...new Set(command.input.tags?.map((tag) => tag.trim()).filter(Boolean) ?? [])],
           notes: planned.success.notes,
+          todos: command.input.todos ?? [],
+          estimateMinutes: command.input.estimateMinutes ?? null,
+          place: command.input.place ?? null,
+          mentalMode: command.input.mentalMode ?? null,
+          priority: command.input.priority ?? null,
+          scheduledDate: command.input.scheduledDate ?? null,
           dueDate: command.input.dueDate ?? null,
           status: "todo",
           quadrant: null,
@@ -305,9 +381,13 @@ export function planBatch(
               key,
               key === "deleted"
                 ? existing.deletedAt !== null
-                : key === "tags"
-                  ? (existing.tags ?? [])
-                  : existing[key as keyof Task],
+                : key === "priority" || key === "scheduledDate"
+                  ? (existing[key] ?? null)
+                  : key === "todos"
+                    ? (existing.todos ?? [])
+                    : key === "tags"
+                      ? (existing.tags ?? [])
+                      : existing[key as keyof Task],
             ]),
           ) as never,
           ...(planned.success.reason ? { reason: planned.success.reason } : {}),
@@ -468,7 +548,16 @@ export function planBatch(
         break;
       }
       case "chat.create": {
-        if (chats.has(command.chatId))
+        const existingChat = chats.get(command.chatId);
+        if (
+          existingChat &&
+          existingChat.projectId === command.input.projectId &&
+          existingChat.title === (command.input.title ?? null)
+        ) {
+          noops.push({ commandIndex: index, reason: "unchanged" });
+          break;
+        }
+        if (existingChat)
           return Result.fail(
             failure("entity_conflict", index, "Chat ID already exists", "chatId", command.chatId),
           );
@@ -575,9 +664,63 @@ export function planBatch(
         );
       drafts.push(draft);
       stageEvent(event, projects, tasks, pages, chats, context.actor);
+      if (
+        event.type === "task.updated" &&
+        (event.set.status === "done" || event.set.deleted === true)
+      ) {
+        const effects = taskTerminalDrafts(
+          { projects, tasks, pages, chats, ...stack },
+          event.taskId,
+          event.set.deleted === true,
+          context,
+        );
+        for (const effect of effects) {
+          drafts.push(effect);
+          applyStackEvent(stack, {
+            ...effect,
+            id: ZERO_ID,
+            at: context.now ?? INVALID_AT,
+          } as Event);
+        }
+      }
     }
   }
-  return Result.succeed({ drafts, noops, finalSnapshot: { projects, tasks, pages, chats } });
+  // Scheduling is the membership authority; daily entries only retain execution state.
+  const scheduledTasks = new Set(
+    drafts.flatMap((draft) =>
+      draft.type === "task.created" ||
+      (draft.type === "task.updated" && draft.set.scheduledDate !== undefined)
+        ? [draft.taskId]
+        : [],
+    ),
+  );
+  if (scheduledTasks.size)
+    for (const day of stack.days.values()) {
+      const affected =
+        [...tasks.values()].some(
+          (task) => scheduledTasks.has(task.id) && task.scheduledDate === day.date,
+        ) ||
+        [...stack.dayEntries.values()].some(
+          (entry) => entry.dayId === day.id && entry.taskId && scheduledTasks.has(entry.taskId),
+        );
+      if (!affected) continue;
+      const synced = planDailyCommand(
+        { projects, tasks, pages, chats, ...stack },
+        { type: "day.ensure", date: day.date, timezone: day.timezone },
+        context,
+      );
+      if (Result.isFailure(synced))
+        return Result.fail({ ...synced.failure, commandIndex: Math.max(0, commands.length - 1) });
+      for (const draft of synced.success) {
+        drafts.push(draft);
+        applyStackEvent(stack, { ...draft, id: ZERO_ID, at: context.now ?? INVALID_AT } as Event);
+      }
+    }
+  return Result.succeed({
+    drafts,
+    noops,
+    finalSnapshot: { projects, tasks, pages, chats, ...stack, reviewItems },
+  });
 }
 
 /** Add caller supplied IDs and strictly increasing timestamps, validating the full batch. */
@@ -701,6 +844,12 @@ function stageEvent(
         title: event.title,
         tags: event.tags ?? [],
         notes: event.notes ?? "",
+        todos: event.todos ?? [],
+        estimateMinutes: event.estimateMinutes ?? null,
+        place: event.place ?? null,
+        mentalMode: event.mentalMode ?? null,
+        priority: event.priority ?? null,
+        scheduledDate: event.scheduledDate ?? null,
         dueDate: event.dueDate ?? null,
         status: event.status,
         quadrant: event.quadrant,
@@ -723,6 +872,20 @@ function stageEvent(
         title: event.set.title ?? current.title,
         tags: event.set.tags ?? current.tags ?? [],
         notes: event.set.notes ?? current.notes,
+        todos: event.set.todos ?? current.todos ?? [],
+        estimateMinutes:
+          event.set.estimateMinutes !== undefined
+            ? event.set.estimateMinutes
+            : (current.estimateMinutes ?? null),
+        place: event.set.place !== undefined ? event.set.place : (current.place ?? null),
+        mentalMode:
+          event.set.mentalMode !== undefined ? event.set.mentalMode : (current.mentalMode ?? null),
+        priority:
+          event.set.priority !== undefined ? event.set.priority : (current.priority ?? null),
+        scheduledDate:
+          event.set.scheduledDate !== undefined
+            ? event.set.scheduledDate
+            : (current.scheduledDate ?? null),
         dueDate: event.set.dueDate !== undefined ? event.set.dueDate : current.dueDate,
         status,
         quadrant: event.set.quadrant !== undefined ? event.set.quadrant : current.quadrant,

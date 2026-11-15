@@ -9,6 +9,12 @@ import type {
   ProjectId,
   Task,
   TaskId,
+  Day,
+  DayEntry,
+  WorkInterval,
+  StackTemplate,
+  StackPreferences,
+  ReviewItem,
 } from "@yatma/core";
 import { encodeEvent, foldEvents, parseEventLine } from "@yatma/core";
 import type { SQLiteDatabase } from "expo-sqlite";
@@ -167,6 +173,7 @@ export async function getOrCreateDeviceId(): Promise<string> {
 
 /** Persist an event. Omit `seq` for outbox rows. */
 export async function appendEvent(event: Event): Promise<void> {
+  assertSupportedEvents([event]);
   await withLocalWriteLock(async (databaseName) => {
     const database = await openDatabase(databaseName);
     await database.runAsync(
@@ -220,6 +227,7 @@ export async function appendEventAndUpsert(
 
 /** Commit a validated local batch and the projections rebuilt from it atomically. */
 export async function commitLocalBatch(events: readonly Event[]): Promise<FoldedEntities> {
+  assertSupportedEvents(events);
   return withLocalWriteLock(async (databaseName) => {
     const database = await openDatabase(databaseName);
     let next!: FoldedEntities;
@@ -229,8 +237,7 @@ export async function commitLocalBatch(events: readonly Event[]): Promise<Folded
       );
       const existing: Event[] = [];
       for (const row of eventRows) {
-        const parsed = parseEventLine(row.payload);
-        if (parsed.ok) existing.push(eventWithSequence(parsed.event, row.seq));
+        existing.push(eventFromRow(row));
       }
       const byId = new Map(existing.map((event) => [event.id, event]));
       const newEvents: Event[] = [];
@@ -281,6 +288,20 @@ function eventPayload(event: Event): string {
   return JSON.stringify(content);
 }
 
+/** Fail closed on an unreadable journal instead of projecting incomplete history. */
+function eventFromRow(row: EventRow): Event {
+  const parsed = parseEventLine(row.payload);
+  if (!parsed.ok) throw new Error(`Unsupported or invalid stored event: ${row.id}`);
+  return eventWithSequence(parsed.event, row.seq);
+}
+
+function assertSupportedEvents(events: readonly Event[]): void {
+  for (const event of events) {
+    const parsed = parseEventLine(JSON.stringify(event));
+    if (!parsed.ok) throw new Error(`Unsupported or invalid incoming event: ${event.id}`);
+  }
+}
+
 function eventWithSequence(event: Event, sequence: number | null): Event {
   const { seq: _embeddedSequence, ...content } = event;
   return sequence === null ? (content as Event) : ({ ...content, seq: sequence } as Event);
@@ -309,19 +330,28 @@ export async function loadCachedEntities(databaseName?: string): Promise<CachedE
   );
   if (rows.length === 0) return null;
 
+  const reviewItems = new Map<string, ReviewItem>();
   const projects = new Map<ProjectId, Project>();
   const tasks = new Map<TaskId, Task>();
   const pages = new Map<PageId, Page>();
   const chats = new Map<ChatId, Chat>();
+  const days = new Map<string, Day>();
+  const dayEntries = new Map<string, DayEntry>();
+  const workIntervals = new Map<string, WorkInterval>();
+  const stackTemplates = new Map<string, StackTemplate>();
+  const stackPreferences = new Map<string, StackPreferences>();
 
   for (const row of rows) {
     let parsed: unknown;
     try {
       parsed = JSON.parse(row.payload);
     } catch {
-      continue;
+      return null;
     }
     switch (row.kind) {
+      case "review":
+        reviewItems.set(row.id, parsed as ReviewItem);
+        break;
       case "project":
         projects.set(row.id as ProjectId, parsed as Project);
         break;
@@ -334,10 +364,38 @@ export async function loadCachedEntities(databaseName?: string): Promise<CachedE
       case "chat":
         chats.set(row.id as ChatId, parsed as Chat);
         break;
+      case "day":
+        days.set(row.id, parsed as Day);
+        break;
+      case "dayEntry":
+        dayEntries.set(row.id, parsed as DayEntry);
+        break;
+      case "workInterval":
+        workIntervals.set(row.id, parsed as WorkInterval);
+        break;
+      case "stackTemplate":
+        stackTemplates.set(row.id, parsed as StackTemplate);
+        break;
+      case "stackPreferences":
+        stackPreferences.set(row.id, parsed as StackPreferences);
+        break;
+      default:
+        throw new Error(`Unsupported cached entity kind: ${row.kind}`);
     }
   }
 
-  return { projects, tasks, pages, chats };
+  return {
+    reviewItems,
+    projects,
+    tasks,
+    pages,
+    chats,
+    days,
+    dayEntries,
+    workIntervals,
+    stackTemplates,
+    stackPreferences,
+  };
 }
 
 export type HydratedLocalState = {
@@ -395,8 +453,7 @@ export async function loadAllEvents(databaseName?: string): Promise<Event[]> {
   );
   const events: Event[] = [];
   for (const row of rows) {
-    const parsed = parseEventLine(row.payload);
-    if (parsed.ok) events.push(eventWithSequence(parsed.event, row.seq));
+    events.push(eventFromRow(row));
   }
   return events;
 }
@@ -412,8 +469,7 @@ export async function loadOutboxEvents(): Promise<Event[]> {
   );
   const events: Event[] = [];
   for (const row of rows) {
-    const parsed = parseEventLine(row.payload);
-    if (parsed.ok) events.push(eventWithSequence(parsed.event, row.seq));
+    events.push(eventFromRow(row));
   }
   return events;
 }
@@ -462,6 +518,7 @@ export async function mergeRemoteBatch(
   events: readonly Event[],
   cursor?: LocalCursorUpdate,
 ): Promise<FoldedEntities> {
+  assertSupportedEvents(events);
   if (cursor && (!Number.isSafeInteger(cursor.after) || cursor.after < 0)) {
     throw new Error("invalid remote cursor");
   }
@@ -507,8 +564,7 @@ export async function mergeRemoteBatch(
       );
       const all: Event[] = [];
       for (const row of rows) {
-        const parsed = parseEventLine(row.payload);
-        if (parsed.ok) all.push(eventWithSequence(parsed.event, row.seq));
+        all.push(eventFromRow(row));
       }
       folded = foldEvents(all);
       await writeEntityRows(tx, folded);

@@ -43,6 +43,7 @@ import {
   type LocalMutationResult,
   type LocalUndoResult,
 } from "../application/mutations";
+import { createTaskInteractions, type TaskInteractions } from "../application/taskInteractions";
 
 export type AppState = {
   readonly accountId: string | null;
@@ -123,6 +124,7 @@ const initialState: AppState = {
 
 type AppStore = {
   readonly state: AppState;
+  readonly taskInteractions: TaskInteractions;
   readonly dispatchLocalEvent: (event: Event) => Promise<void>;
   readonly executeLocalCommands: (
     commands: readonly BatchCommand[],
@@ -215,6 +217,8 @@ function commandFromEvent(event: Event): BatchCommand {
       };
     case "chat.updated":
       return { type: "chat.update", input: { chatId: event.chatId, ...event.set } };
+    default:
+      throw new Error("Daily changes must use executeLocalCommands");
   }
 }
 
@@ -228,6 +232,14 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
   stateRef.current = state;
   const generationRef = useRef(0);
   const switchingAccountRef = useRef(false);
+  const taskInteractionsRef = useRef<TaskInteractions | null>(null);
+  if (!taskInteractionsRef.current) {
+    taskInteractionsRef.current = createTaskInteractions({
+      readTask: (taskId) => stateRef.current.folded.tasks.get(taskId),
+      updateTask,
+      getGeneration: () => generationRef.current,
+    });
+  }
   const mutationWriterRef = useRef<ReturnType<typeof createLocalMutationWriter> | null>(null);
   if (!mutationWriterRef.current) {
     mutationWriterRef.current = createLocalMutationWriter({
@@ -280,12 +292,12 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
               {
                 type: "task.create",
                 taskId: TaskIdSchema.make(generateShortId("t_")),
-                input: { title: "Hold a task to change its priority", projectId },
+                input: { title: "Ask Yatma to plan your day", projectId },
               },
               {
                 type: "task.create",
                 taskId: TaskIdSchema.make(generateShortId("t_")),
-                input: { title: "Place this task in the Eisenhower matrix", projectId: null },
+                input: { title: "Choose a task for Today and open focus mode", projectId: null },
               },
             ];
             await mutationWriterRef.current!.execute(commands, localUserActor(hydrated.deviceId));
@@ -390,6 +402,7 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
 
   async function resetState(): Promise<void> {
     generationRef.current += 1;
+    taskInteractionsRef.current!.reset();
     await mutationWriterRef.current!.serialize(async () => {
       await wipeLocalData();
       stateRef.current = { ...stateRef.current, folded: emptyFolded(), lastSeenAt: null };
@@ -401,6 +414,7 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
     if (switchingAccountRef.current && stateRef.current.accountId === accountId) return;
     if (stateRef.current.accountId === accountId && stateRef.current.ready) return;
     const generation = ++generationRef.current;
+    taskInteractionsRef.current!.reset();
     switchingAccountRef.current = true;
     stateRef.current = {
       ...stateRef.current,
@@ -505,6 +519,7 @@ export function AppStateProvider(props: { readonly children: ReactNode }) {
 
   const store: AppStore = {
     state: bootstrapped ? state : { ...state, ready: false },
+    taskInteractions: taskInteractionsRef.current,
     dispatchLocalEvent,
     executeLocalCommands,
     undoBatch,

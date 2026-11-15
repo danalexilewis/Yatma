@@ -2,7 +2,7 @@
   "expo": {
     "name": "Yatma",
     "slug": "yatma",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "yatma",
@@ -84,6 +84,7 @@
       "expo-sharing",
       "expo-web-browser",
       "expo-font",
+      "expo-notifications",
       [
         "expo-audio",
         {

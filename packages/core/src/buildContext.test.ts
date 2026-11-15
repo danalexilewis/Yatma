@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { buildContext, contextText } from "./buildContext.ts";
 import { ChatId, DeviceId, PageId, ProjectId, TaskId } from "./ids.ts";
+import type { DayEntry } from "./stackSchemas.ts";
 import type { Chat, Page, Project, Task } from "./schemas.ts";
 
 const deviceId = DeviceId.make("device-1");
@@ -62,7 +63,7 @@ function makePage(id: string, title: string, body: string, overrides: Partial<Pa
 }
 
 describe("buildContext", () => {
-  it("shares project properties, bookmarks, task dates, and personal matrix labels with the model", () => {
+  it("shares project properties, bookmarks and task dates without quadrant coaching", () => {
     const project = {
       ...makeProject("p_AAAAAAA1", "App"),
       description: "Ship a calm task experience",
@@ -87,7 +88,8 @@ describe("buildContext", () => {
     expect(text).toContain("Ship a calm task experience");
     expect(text).toContain("Target date: 2026-12-01");
     expect(text).toContain("Bookmark: Design (https://example.com/design)");
-    expect(text).toContain("Urgent, not important; due 2026-10-20");
+    expect(text).toContain("due 2026-10-20");
+    expect(text).not.toContain("Urgent, not important");
     expect(text).not.toContain("delegate");
   });
   it("builds a global context with me brief, projects, and top open tasks", () => {
@@ -299,5 +301,100 @@ describe("buildContext", () => {
     });
     expect(contextText(context)).toBe("Today: 2026-10-06\n\nDoing: ");
     expect(context.estimatedTokens).toBe(Math.ceil(contextText(context).length / 4));
+  });
+});
+
+function planningEntry(index: number, task: Task | null = null): DayEntry {
+  return {
+    id: `selected-${index}`,
+    dayId: "today",
+    kind: task ? "task" : "activity",
+    taskId: task?.id ?? null,
+    title: "Original message title",
+    allocationMinutes: 20,
+    position: "n",
+    status: "pending",
+    origin: `manual:${index}`,
+    manual: true,
+    carryOrder: null,
+    preparation: false,
+    resumeEntryId: null,
+    createdAt: "2026-11-11T00:00:00.000Z",
+    updatedAt: "2026-11-11T00:00:00.000Z",
+  };
+}
+
+describe("deliberate daily planning context", () => {
+  it("keeps selected commitments separate from backlog and resolves current task metadata", () => {
+    const selected = makeTask("t_AAAAAAA1", "Current task title", "d", {
+      estimateMinutes: 25,
+      priority: "high",
+      scheduledDate: "2026-11-11",
+      quadrant: "eliminate",
+    });
+    const candidate = makeTask("t_AAAAAAA2", "Backlog candidate", "m", { quadrant: "do" });
+    const context = buildContext({
+      today: "2026-11-11",
+      planning: {
+        date: "2026-11-11",
+        timezone: "Pacific/Auckland",
+        entries: [planningEntry(1, selected)],
+      },
+      projects: new Map(),
+      tasks: new Map([
+        [selected.id, selected],
+        [candidate.id, candidate],
+      ]),
+      pages: new Map(),
+      chats: new Map(),
+      projectId: null,
+      chatId: null,
+      tokenBudget: 6000,
+    });
+    const text = contextText(context);
+    expect(text).toContain("Planning date: 2026-11-11; timezone: Pacific/Auckland");
+    expect(context.planningSummary).toContain("Selected commitments: 1");
+    expect(context.planningSummary).toContain("Current task title");
+    expect(context.planningSummary).not.toContain("Backlog candidate");
+    expect(context.tasks.map((task) => task.id)).toEqual([selected.id, candidate.id]);
+    expect(text).toContain("estimate 25 min; priority high; scheduled 2026-11-11");
+  });
+
+  it("bounds large daily plans within the same context budget", () => {
+    const entries = Array.from({ length: 200 }, (_, index) => ({
+      ...planningEntry(index),
+      title: "A long planning activity ".repeat(8),
+    }));
+    const context = buildContext({
+      today: "2026-11-11",
+      planning: { date: "2026-11-11", timezone: "Pacific/Auckland", entries },
+      projects: new Map(),
+      tasks: new Map(),
+      pages: new Map(),
+      chats: new Map(),
+      projectId: null,
+      chatId: null,
+      tokenBudget: 220,
+    });
+    expect(contextText(context).length).toBeLessThanOrEqual(220 * 4);
+    expect(context.estimatedTokens).toBeLessThanOrEqual(220);
+    expect(context.estimatedTokens).toBe(Math.ceil(contextText(context).length / 4));
+  });
+
+  it("labels unknown timezone explicitly instead of presenting server UTC as the user's planning day", () => {
+    const context = buildContext({
+      today: "2026-11-10",
+      planning: { date: "2026-11-10", timezone: null, entries: [] },
+      projects: new Map(),
+      tasks: new Map(),
+      pages: new Map(),
+      chats: new Map(),
+      projectId: null,
+      chatId: null,
+      tokenBudget: 6000,
+    });
+    expect(context.planningSummary).toContain("timezone is unknown");
+    expect(context.planningSummary).toContain("server UTC date");
+    expect(context.planningSummary).not.toContain("Pacific/Auckland");
   });
 });

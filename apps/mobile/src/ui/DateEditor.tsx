@@ -2,6 +2,7 @@ import { addCalendarDays, isCalendarDate, localCalendarDate } from "@yatma/core"
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { IconButton } from "./IconButton";
 import { useTheme } from "../theme/theme";
 
 /** Calendar-only date editing with explicit save, quick choices, and visible persistence failures. */
@@ -9,6 +10,8 @@ export function DateEditor(props: {
   readonly value: string | null;
   readonly onSave: (value: string | null) => Promise<unknown>;
   readonly label?: string;
+  readonly showQuickChoices?: boolean;
+  readonly clearable?: boolean;
 }) {
   const theme = useTheme();
   const [draft, setDraft] = useState(props.value ?? "");
@@ -63,6 +66,14 @@ export function DateEditor(props: {
           ]}
           onSubmitEditing={() => void save(draft)}
         />
+        {props.clearable && (props.value || draft) ? (
+          <IconButton
+            name="close-outline"
+            accessibilityLabel={`Clear ${label.toLowerCase()}`}
+            disabled={saving}
+            onPress={() => void save(null)}
+          />
+        ) : null}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Save ${label.toLowerCase()}`}
@@ -75,25 +86,27 @@ export function DateEditor(props: {
           </Text>
         </Pressable>
       </View>
-      <View style={styles.quick}>
-        {[
-          { title: "Today", value: today },
-          { title: "Tomorrow", value: addCalendarDays(today, 1) },
-          { title: "Next week", value: addCalendarDays(today, 7) },
-          { title: "Clear", value: null },
-        ].map((choice) => (
-          <Pressable
-            key={choice.title}
-            accessibilityRole="button"
-            accessibilityLabel={`${label}: ${choice.title}`}
-            disabled={saving}
-            onPress={() => void save(choice.value)}
-            style={[styles.choice, { backgroundColor: theme.colors.pineSoft }]}
-          >
-            <Text style={{ color: theme.colors.pine, fontSize: 12 }}>{choice.title}</Text>
-          </Pressable>
-        ))}
-      </View>
+      {props.showQuickChoices !== false ? (
+        <View style={styles.quick}>
+          {[
+            { title: "Today", value: today },
+            { title: "Tomorrow", value: addCalendarDays(today, 1) },
+            { title: "Next week", value: addCalendarDays(today, 7) },
+            { title: "Clear", value: null },
+          ].map((choice) => (
+            <Pressable
+              key={choice.title}
+              accessibilityRole="button"
+              accessibilityLabel={`${label}: ${choice.title}`}
+              disabled={saving}
+              onPress={() => void save(choice.value)}
+              style={[styles.choice, { backgroundColor: theme.colors.pineSoft }]}
+            >
+              <Text style={{ color: theme.colors.pine, fontSize: 12 }}>{choice.title}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       {error ? (
         <Text accessibilityRole="alert" style={{ color: theme.colors.danger, fontSize: 13 }}>
           {error}

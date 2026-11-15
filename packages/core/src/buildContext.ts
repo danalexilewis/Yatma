@@ -1,12 +1,17 @@
 // Copyright (c) T3 Tools / MIT — adapted for Yatma
 import type { ChatId, ProjectId } from "./ids.ts";
 import type { Chat, Page, Project, Task } from "./schemas.ts";
-import { selectDoingSummary, selectNowList } from "./selectors.ts";
+import { selectDoingSummary } from "./selectors.ts";
 import { isOpenTask, sortTasksByPosition } from "./rules.ts";
-import { quadrantLabel } from "./matrix.ts";
+import type { DayEntry } from "./stackSchemas.ts";
 
 export type BuildContextInput = {
   readonly today: string;
+  readonly planning?: {
+    readonly date: string;
+    readonly timezone: string | null;
+    readonly entries: readonly DayEntry[];
+  };
   readonly projects: ReadonlyMap<ProjectId, Project>;
   readonly tasks: ReadonlyMap<TaskIdLike, Task>;
   readonly pages: ReadonlyMap<PageIdLike, Page>;
@@ -30,6 +35,9 @@ export type ContextTaskLine = {
   readonly dueDate: Task["dueDate"];
   readonly projectId: ProjectId | null;
   readonly projectTitle: string | null;
+  readonly estimateMinutes: number | null;
+  readonly priority: Task["priority"];
+  readonly scheduledDate: string | null;
 };
 
 export type ContextPageLine = {
@@ -49,6 +57,7 @@ export type ContextChatSummary = {
 export type BuiltContext = {
   readonly scope: "global" | "project";
   readonly today: string;
+  readonly planningSummary: string | null;
   readonly meBrief: string | null;
   readonly projectBrief: string | null;
   readonly projectLines: readonly {
@@ -83,6 +92,7 @@ function fitContextBudget(context: BuiltContext, requestedBudget: number): Built
     if (value === null || value.length <= fieldLimit) return value;
     return `${value.slice(0, Math.max(0, fieldLimit - 1)).trimEnd()}…`;
   }
+  let planningSummary = cap(context.planningSummary);
   let meBrief = cap(context.meBrief);
   let projectBrief = cap(context.projectBrief);
   let projectLines = context.projectLines.map((line) => ({
@@ -113,6 +123,7 @@ function fitContextBudget(context: BuiltContext, requestedBudget: number): Built
   function current(): BuiltContext {
     const built = {
       ...context,
+      planningSummary,
       meBrief,
       projectBrief,
       projectLines,
@@ -168,6 +179,11 @@ function fitContextBudget(context: BuiltContext, requestedBudget: number): Built
   while (overBudget() > 0 && chatSummaries.length > 0)
     removeLast(chatSummaries, (next) => {
       chatSummaries = next;
+    });
+
+  if (overBudget() > 0 && planningSummary !== null)
+    shrink(planningSummary, (next) => {
+      planningSummary = next || null;
     });
 
   if (overBudget() > 0 && conversationSummary !== null) {
@@ -272,6 +288,7 @@ function fitContextBudget(context: BuiltContext, requestedBudget: number): Built
     }));
   }
   if (overBudget() > 0) {
+    planningSummary = null;
     meBrief = null;
     projectBrief = null;
     projectLines = [];
@@ -317,6 +334,9 @@ function compactTaskLine(task: Task, projects: ReadonlyMap<ProjectId, Project>):
     dueDate: task.dueDate,
     projectId: task.projectId,
     projectTitle: projectTitleOf(task.projectId, projects),
+    estimateMinutes: task.estimateMinutes ?? null,
+    priority: task.priority ?? null,
+    scheduledDate: task.scheduledDate ?? null,
   };
 }
 
@@ -333,6 +353,7 @@ function projectProperties(project: Project | undefined): string {
 
 function serializeContext(parts: {
   readonly today: string;
+  readonly planningSummary: string | null;
   readonly meBrief: string | null;
   readonly projectBrief: string | null;
   readonly projectLines: BuiltContext["projectLines"];
@@ -344,6 +365,7 @@ function serializeContext(parts: {
   readonly recentMessages: readonly { readonly role: string; readonly text: string }[];
 }): string {
   const chunks: string[] = [`Today: ${parts.today}`, `Doing: ${parts.doingSummary}`];
+  if (parts.planningSummary) chunks.push(`Daily planning:\n${parts.planningSummary}`);
   if (parts.meBrief) chunks.push(`Me brief:\n${parts.meBrief}`);
   if (parts.projectBrief) chunks.push(`Project brief:\n${parts.projectBrief}`);
   if (parts.projectLines.length > 0) {
@@ -362,9 +384,12 @@ function serializeContext(parts: {
         parts.tasks
           .map((task) => {
             const project = task.projectTitle ? ` [${task.projectTitle}]` : "";
-            const quadrant = quadrantLabel(task.quadrant);
             const dueDate = task.dueDate ? `; due ${task.dueDate}` : "; no due date";
-            return `- ${task.id} (${task.status}; ${quadrant}${dueDate})${project}: ${task.title}`;
+            const estimate =
+              task.estimateMinutes == null ? "" : `; estimate ${task.estimateMinutes} min`;
+            const priority = task.priority ? `; priority ${task.priority}` : "";
+            const scheduled = task.scheduledDate ? `; scheduled ${task.scheduledDate}` : "";
+            return `- ${task.id} (${task.status}${dueDate}${estimate}${priority}${scheduled})${project}: ${task.title}`;
           })
           .join("\n"),
     );
@@ -402,6 +427,7 @@ function serializeContext(parts: {
 export function contextText(built: BuiltContext): string {
   return serializeContext({
     today: built.today,
+    planningSummary: built.planningSummary,
     meBrief: built.meBrief,
     projectBrief: built.projectBrief,
     projectLines: built.projectLines,
@@ -419,6 +445,7 @@ export function contextText(built: BuiltContext): string {
  * The phone Context tab should render this exact output.
  */
 export function buildContext(input: BuildContextInput): BuiltContext {
+  const planningSummary = planningSummaryOf(input);
   const allTasks = [...input.tasks.values()];
   const doing = selectDoingSummary(allTasks, input.projects);
   const doingSummary =
@@ -437,7 +464,7 @@ export function buildContext(input: BuildContextInput): BuiltContext {
     .map((message) => ({ role: message.role, text: message.text }));
 
   if (input.projectId === null) {
-    const open = selectNowList(allTasks).slice(0, GLOBAL_TASK_CAP);
+    const open = sortTasksByPosition(allTasks).filter(isOpenTask).slice(0, GLOBAL_TASK_CAP);
     const tasks = open.map((task) => compactTaskLine(task, input.projects));
     const projectLines = [...input.projects.values()]
       .filter((project) => project.archivedAt === null)
@@ -456,6 +483,7 @@ export function buildContext(input: BuildContextInput): BuiltContext {
     return fitContextBudget(
       {
         scope: "global",
+        planningSummary,
         today: input.today,
         meBrief,
         projectBrief: null,
@@ -521,6 +549,7 @@ export function buildContext(input: BuildContextInput): BuiltContext {
   return fitContextBudget(
     {
       scope: "project",
+      planningSummary,
       today: input.today,
       meBrief: null,
       projectBrief,
@@ -536,4 +565,26 @@ export function buildContext(input: BuildContextInput): BuiltContext {
     },
     input.tokenBudget,
   );
+}
+
+function planningSummaryOf(input: BuildContextInput): string | null {
+  const planning = input.planning;
+  if (!planning) return null;
+  if (!planning.timezone)
+    return "User planning date/timezone is unknown. Today above is the server UTC date, not a confirmed local day. Ask before date-targeted changes.";
+  const selected = planning.entries.filter((entry) => entry.status === "pending");
+  const lines = selected.slice(0, 30).map((entry) => {
+    const title = entry.taskId
+      ? (input.tasks.get(entry.taskId)?.title ?? entry.title)
+      : entry.title;
+    return `- ${entry.id}: ${title} (${entry.kind}, ${entry.allocationMinutes} min${entry.taskId ? `, task ${entry.taskId}` : ""})`;
+  });
+  return [
+    `Planning date: ${planning.date}; timezone: ${planning.timezone}.`,
+    `Selected commitments: ${selected.length}. Backlog tasks are candidates, not automatic commitments.`,
+    ...lines,
+    ...(selected.length > 30
+      ? [`${selected.length - 30} additional selected entries; use read_day for details.`]
+      : []),
+  ].join("\n");
 }

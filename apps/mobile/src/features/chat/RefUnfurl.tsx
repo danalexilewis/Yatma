@@ -1,18 +1,16 @@
-import {
-  classifyRefPlacement,
-  parseRefHref,
-  type EntityRef,
-} from "@yatma/core";
+import { classifyRefPlacement, extractRefs, type EntityRef } from "@yatma/core";
 import { Link } from "expo-router";
-import { useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import { useAppStore, useFoldedState } from "../../state/atoms";
-import { selectPage, selectTask } from "../../state/selectors";
+import { parseMessageParts, type MessagePart } from "./messageParts";
+import { TaskMetadata } from "../task/TaskMetadata";
+import { useTaskInteraction } from "../task/useTaskInteraction";
+import { useTaskNavigation } from "../task/useTaskNavigation";
+import { useFoldedState } from "../../state/atoms";
+import { selectPage } from "../../state/selectors";
 import { useTheme } from "../../theme/theme";
 
 export type RefKind = EntityRef["kind"];
-
 export type ParsedRef = {
   readonly kind: RefKind;
   readonly id: string;
@@ -20,281 +18,252 @@ export type ParsedRef = {
   readonly block: boolean;
 };
 
-/** Parse markdown-style refs using @yatma/core parsers. */
-export function parseRefs(text: string): {
-  readonly plain: string;
-  readonly refs: ParsedRef[];
-} {
-  const refs: ParsedRef[] = [];
-  const lines = text.split("\n");
-  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-    const line = lines[lineIndex] ?? "";
-    const markdown = /\[([^\]]*)\]\((task|page|chat):([^\s)]+)\)/g;
-    for (const match of line.matchAll(markdown)) {
-      const parsed = parseRefHref(`${match[2]}:${match[3]}`, match[1] ?? "");
-      if (parsed.ok) {
-        refs.push({
-          kind: parsed.ref.kind,
-          id: parsed.ref.id,
-          label: parsed.ref.label || parsed.ref.id,
-          block: classifyRefPlacement(text, lineIndex) !== "chip",
-        });
-      }
-    }
-  }
-  return { plain: text, refs };
+/** Compatibility parser for consumers needing valid entity references. */
+export function parseRefs(text: string): { readonly plain: string; readonly refs: ParsedRef[] } {
+  return {
+    plain: text,
+    refs: text.split("\n").flatMap((line, index) =>
+      extractRefs(line).map((ref) => ({
+        ...ref,
+        block: classifyRefPlacement(text, index) !== "chip",
+      })),
+    ),
+  };
 }
 
-type RefUnfurlProps = {
+/** Renders a live reference without copying entity data into the historical message. */
+export function RefUnfurl(props: {
   readonly refItem: ParsedRef;
   readonly taskLinksOnly?: boolean;
-};
-
-/** Render a live chip or standalone card for a referenced entity. */
-export function RefUnfurl(props: RefUnfurlProps) {
-  const { refItem } = props;
+}) {
   const theme = useTheme();
   const folded = useFoldedState();
-
-  if (refItem.kind === "task") {
-    const task = selectTask(folded, refItem.id);
-    if (!task) return <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>{refItem.label}</Text>;
-    const href = `/task/${task.id}` as const;
-    return refItem.block && !props.taskLinksOnly ? (
-      <TaskRow taskId={task.id} />
-    ) : (
-      <Link href={href} asChild>
-        <Pressable style={[styles.chip, { backgroundColor: theme.colors.pineSoft }]}>
-          <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta }}>{task.title}</Text>
+  const navigation = useTaskNavigation();
+  const ref = props.refItem;
+  if (ref.kind === "task") {
+    if (ref.block && !props.taskLinksOnly) return <TaskBlock taskId={ref.id} label={ref.label} />;
+    const task = [...folded.tasks.values()].find((item) => item.id === ref.id);
+    return (
+      <Pressable
+        accessibilityRole="link"
+        onPress={() => navigation.openTask(ref.id)}
+        style={[styles.chip, { backgroundColor: theme.colors.pineSoft }]}
+      >
+        <Text style={{ color: theme.colors.pine, fontSize: theme.type.meta }}>
+          {task?.title ?? ref.label}
+          {task?.deletedAt ? " (deleted)" : !task ? " (unavailable)" : ""}
+        </Text>
+      </Pressable>
+    );
+  }
+  if (ref.kind === "project") {
+    const project = [...folded.projects.values()].find((item) => item.id === ref.id);
+    if (!project)
+      return <Text style={{ color: theme.colors.muted }}>{ref.label} (project unavailable)</Text>;
+    return (
+      <Link href={`/project/${project.id}/overview`} asChild>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={`Open project: ${project.title}${project.archivedAt ? " (archived)" : ""}`}
+          style={[styles.chip, { backgroundColor: theme.colors.pineSoft }]}
+        >
+          <Text style={{ color: theme.colors.pine }}>
+            {project.title}
+            {project.archivedAt ? " (archived)" : ""}
+          </Text>
         </Pressable>
       </Link>
     );
   }
-
-  if (refItem.kind === "page") {
-    const page = selectPage(folded, refItem.id);
-    if (!page) return <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>{refItem.label}</Text>;
+  if (ref.kind === "page") {
+    const page = selectPage(folded, ref.id);
+    if (!page)
+      return <Text style={{ color: theme.colors.muted }}>{ref.label} (page unavailable)</Text>;
     return (
       <Link href={`/page/${page.id}`} asChild>
-        <Pressable style={[styles.block, { borderColor: theme.colors.line, backgroundColor: theme.colors.surface }]}>
-          <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta }}>Page</Text>
-          <Text style={{ marginTop: 4, color: theme.colors.ink, fontSize: theme.type.row, fontWeight: "500" }}>{page.title}</Text>
+        <Pressable style={[styles.chip, { backgroundColor: theme.colors.pineSoft }]}>
+          <Text style={{ color: theme.colors.pine }}>{page.title}</Text>
         </Pressable>
       </Link>
     );
   }
-
   return (
-    <Link href={`/chat/${refItem.id}`} asChild>
+    <Link href={`/chat/${ref.id}`} asChild>
       <Pressable style={[styles.chip, { backgroundColor: theme.colors.pineSoft }]}>
-        <Text style={{ color: theme.colors.ink, fontSize: theme.type.meta }}>{refItem.label}</Text>
+        <Text style={{ color: theme.colors.pine }}>{ref.label}</Text>
       </Pressable>
     </Link>
   );
 }
 
-type TaskRowProps = {
+/** Shared controls retain every occurrence and publish only the account's committed task state. */
+export function TaskBlock(props: {
   readonly taskId: string;
+  readonly label: string;
   readonly commentary?: string;
-};
-
-function TaskRow(props: TaskRowProps) {
+  readonly prefix?: string;
+}) {
   const theme = useTheme();
-  const folded = useFoldedState();
-  const store = useAppStore();
-  const task = selectTask(folded, props.taskId);
-  const [saving, setSaving] = useState(false);
-  if (!task) return null;
-  const currentTask = task;
-  const completed = currentTask.status === "done";
-
-  async function toggleTask() {
-    if (saving) return;
-    setSaving(true);
+  const navigation = useTaskNavigation();
+  const interaction = useTaskInteraction(props.taskId);
+  const task = interaction.task;
+  const disabled = interaction.pending || interaction.availability !== "available";
+  const completed = task?.status === "done";
+  async function changeStatus() {
     try {
-      await store.executeLocalCommands([{
-        type: "task.update",
-        input: { taskId: currentTask.id, status: completed ? "todo" : "done" },
-      }]);
-    } catch (error) {
-      Alert.alert("Could not update task", error instanceof Error ? error.message : "Try again.");
-    } finally {
-      setSaving(false);
+      await interaction.setStatus(completed ? "todo" : "done");
+    } catch {
+      /* The account coordinator exposes the retryable error to every occurrence. */
     }
   }
-
   return (
-    <View style={styles.taskRow}>
-      <Pressable
-        onPress={() => void toggleTask()}
-        disabled={saving}
-        accessibilityRole="checkbox"
-        accessibilityLabel={`${completed ? "Reopen" : "Complete"} ${currentTask.title}`}
-        accessibilityState={{ checked: completed, disabled: saving }}
-        hitSlop={8}
-        style={styles.checkTarget}
-      >
-        <View style={[styles.circle, {
-          borderColor: completed ? theme.colors.pine : theme.colors.muted,
-          backgroundColor: completed ? theme.colors.pine : "transparent",
-        }]}>
-          {completed ? <Text style={{ color: theme.colors.onPine, fontSize: 12, fontWeight: "700" }}>✓</Text> : null}
-        </View>
-      </Pressable>
-      <Link href={`/task/${currentTask.id}`} asChild>
-        <Pressable style={styles.taskCopy} accessibilityRole="link" accessibilityLabel={`Open task: ${currentTask.title}`}>
-          <Text style={{ color: theme.colors.ink, fontSize: theme.type.row, fontWeight: "700" }}>
-            {currentTask.title}
-            {props.commentary ? <Text style={{ fontWeight: "400" }}> — {props.commentary}</Text> : null}
+    <View style={styles.taskContainer}>
+      <View style={styles.taskRow}>
+        {props.prefix?.trim() ? (
+          <Text style={{ color: theme.colors.muted, paddingTop: 12 }}>{props.prefix.trim()}</Text>
+        ) : null}
+        <Pressable
+          onPress={() => void changeStatus()}
+          disabled={disabled}
+          accessibilityRole="checkbox"
+          aria-checked={completed}
+          aria-disabled={disabled}
+          aria-busy={interaction.pending}
+          accessibilityLabel={`${completed ? "Reopen" : "Complete"} ${task?.title ?? props.label}`}
+          accessibilityState={{ checked: completed, disabled, busy: interaction.pending }}
+          style={styles.checkTarget}
+        >
+          <View
+            style={[
+              styles.circle,
+              {
+                borderColor: completed ? theme.colors.pine : theme.colors.muted,
+                backgroundColor: completed ? theme.colors.pine : "transparent",
+                opacity: disabled ? 0.5 : 1,
+              },
+            ]}
+          >
+            {completed ? (
+              <Text style={{ color: theme.colors.onPine, fontWeight: "700" }}>✓</Text>
+            ) : null}
+          </View>
+        </Pressable>
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={`Open task: ${task?.title ?? props.label}`}
+          onPress={() => navigation.openTask(props.taskId)}
+          style={styles.taskCopy}
+        >
+          <Text
+            style={{
+              color: theme.colors.ink,
+              fontSize: theme.type.row,
+              fontWeight: "600",
+              lineHeight: 24,
+            }}
+          >
+            {task?.title ?? props.label}
+          </Text>
+          {!task || task.deletedAt ? (
+            <Text style={{ color: theme.colors.muted, fontSize: theme.type.meta, marginTop: 3 }}>
+              {!task ? "Task unavailable" : "Deleted task"}
+            </Text>
+          ) : (
+            <TaskMetadata task={task} />
+          )}
+        </Pressable>
+      </View>
+      {props.commentary ? (
+        <Text style={{ marginLeft: 40, color: theme.colors.ink, fontSize: theme.type.row }}>
+          {props.commentary}
+        </Text>
+      ) : null}
+      {interaction.error ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => void changeStatus()}
+          disabled={disabled}
+        >
+          <Text
+            accessibilityRole="alert"
+            style={{ color: theme.colors.danger, fontSize: theme.type.meta }}
+          >
+            {interaction.error} Tap to retry.
           </Text>
         </Pressable>
-      </Link>
+      ) : null}
     </View>
   );
 }
 
-type TaskLine = { readonly taskId: string; readonly label: string; readonly commentary?: string };
-type MessageLine =
-  | { readonly type: "text"; readonly text: string }
-  | { readonly type: "ref"; readonly ref: ParsedRef }
-  | { readonly type: "taskList"; readonly rows: readonly TaskLine[] };
-
-const TASK_LINE = /^\s*\[([^\]]*)\]\(task:([^\s)]+)\)(?:\s*[—–-]\s*(.*))?\s*$/;
-const SINGLE_REF_LINE = /^\s*\[([^\]]*)\]\((task|page|chat):([^\s)]+)\)\s*$/;
-
-function parseMessageLines(text: string): MessageLine[][] {
-  const rawLines = text.split("\n");
-  const output: MessageLine[][] = [];
-  let index = 0;
-  while (index < rawLines.length) {
-    const line = rawLines[index] ?? "";
-    const task = TASK_LINE.exec(line);
-    const parsedTask = task ? parseRefHref(`task:${task[2]}`, task[1] ?? "") : null;
-    if (task && parsedTask?.ok) {
-      const rows: TaskLine[] = [];
-      while (index < rawLines.length) {
-        const candidate = TASK_LINE.exec(rawLines[index] ?? "");
-        if (!candidate) break;
-        const parsed = parseRefHref(`task:${candidate[2]}`, candidate[1] ?? "");
-        if (!parsed.ok) break;
-        rows.push({ taskId: parsed.ref.id, label: parsed.ref.label || parsed.ref.id, ...(candidate[3]?.trim() ? { commentary: candidate[3].trim() } : {}) });
-        index += 1;
-      }
-      output.push([{ type: "taskList", rows }]);
-      continue;
-    }
-
-    const standalone = SINGLE_REF_LINE.exec(line);
-    if (standalone) {
-      const parsed = parseRefHref(`${standalone[2]}:${standalone[3]}`, standalone[1] ?? "");
-      if (parsed.ok) {
-        output.push([{ type: "ref", ref: {
-          kind: parsed.ref.kind,
-          id: parsed.ref.id,
-          label: parsed.ref.label || parsed.ref.id,
-          block: true,
-        } }]);
-        index += 1;
-        continue;
-      }
-    }
-
-    output.push(parseInlineLine(line));
-    index += 1;
+export function MessagePartView(props: {
+  readonly part: MessagePart;
+  readonly taskLinksOnly?: boolean;
+}) {
+  const theme = useTheme();
+  const part = props.part;
+  if (part.kind === "task") {
+    return props.taskLinksOnly ? (
+      <View style={styles.line}>
+        <RefUnfurl refItem={{ kind: "task", id: part.taskId, label: part.label, block: false }} />
+        {part.commentary ? (
+          <Text style={{ color: theme.colors.ink }}>{part.commentary}</Text>
+        ) : null}
+      </View>
+    ) : (
+      <TaskBlock
+        taskId={part.taskId}
+        label={part.label}
+        commentary={part.commentary}
+        prefix={part.prefix}
+      />
+    );
   }
-  return output;
+  return (
+    <View style={styles.line}>
+      {part.parts.map((item, index) =>
+        item.kind === "ref" ? (
+          <RefUnfurl key={index} refItem={{ ...item.ref, block: false }} />
+        ) : (
+          <Text
+            key={index}
+            style={{ color: theme.colors.ink, fontSize: theme.type.row, lineHeight: 25 }}
+          >
+            {item.text || " "}
+          </Text>
+        ),
+      )}
+    </View>
+  );
 }
 
-function parseInlineLine(line: string): MessageLine[] {
-  const matches = [...line.matchAll(/\[([^\]]*)\]\((task|page|chat):([^\s)]+)\)/g)];
-  if (matches.length === 0) return [{ type: "text", text: line }];
-  const parts: MessageLine[] = [];
-  let cursor = 0;
-  for (const match of matches) {
-    const offset = match.index ?? cursor;
-    if (offset > cursor) parts.push({ type: "text", text: line.slice(cursor, offset) });
-    const parsed = parseRefHref(`${match[2]}:${match[3]}`, match[1] ?? "");
-    if (parsed.ok) {
-      parts.push({ type: "ref", ref: {
-        kind: parsed.ref.kind,
-        id: parsed.ref.id,
-        label: parsed.ref.label || parsed.ref.id,
-        block: false,
-      } });
-    } else {
-      parts.push({ type: "text", text: match[0] ?? "" });
-    }
-    cursor = offset + (match[0]?.length ?? 0);
-  }
-  if (cursor < line.length) parts.push({ type: "text", text: line.slice(cursor) });
-  return parts;
-}
-
-type MessageBodyProps = {
+/** Shared parser also renders compact messages outside the virtualized permanent thread. */
+export function MessageWithRefs(props: {
   readonly text: string;
   readonly taskLinksOnly?: boolean;
-};
-
-/** Render assistant text with inline refs and live grouped task rows. */
-export function MessageWithRefs(props: MessageBodyProps) {
-  const theme = useTheme();
-  const lines = parseMessageLines(props.text);
+}) {
   return (
-    <View style={styles.message}>
-      {lines.map((line, lineIndex) => (
-        <View key={`line-${lineIndex}`} style={styles.messageLine}>
-          {line.map((part, partIndex) => {
-            if (part.type === "taskList") {
-              return props.taskLinksOnly ? <View key={`tasks-${partIndex}`} style={styles.taskList}>{part.rows.map((row, index) => <View key={`${row.taskId}:${index}`} style={styles.messageLine}><RefUnfurl refItem={{ kind: "task", id: row.taskId, label: row.label, block: false }} taskLinksOnly />{row.commentary ? <Text style={{ color: theme.colors.ink, fontSize: theme.type.row }}>{row.commentary}</Text> : null}</View>)}</View> : <TaskList key={`tasks-${partIndex}`} rows={part.rows} />;
-            }
-            if (part.type === "ref") {
-              return <RefUnfurl key={`${part.ref.kind}:${part.ref.id}:${partIndex}`} refItem={part.ref} taskLinksOnly={props.taskLinksOnly} />;
-            }
-            return <Text key={`text-${partIndex}`} style={{ color: theme.colors.ink, fontSize: theme.type.row }}>{part.text}</Text>;
-          })}
-        </View>
+    <View style={{ gap: 6 }}>
+      {parseMessageParts(props.text).map((part) => (
+        <MessagePartView key={part.index} part={part} taskLinksOnly={props.taskLinksOnly} />
       ))}
     </View>
   );
 }
 
-function TaskList(props: { readonly rows: readonly TaskLine[] }) {
-  const folded = useFoldedState();
-  const theme = useTheme();
-  const items = props.rows.flatMap((row) => {
-    const task = selectTask(folded, row.taskId);
-    return task ? [{ row, task }] : [];
-  });
-  const completed = items.filter(({ task }) => task.status === "done");
-  const outstanding = items.filter(({ task }) => task.status !== "done");
-  return (
-    <View style={styles.taskList}>
-      {completed.length ? (
-        <View style={styles.taskGroup}>
-          <Text style={[styles.groupHeading, { color: theme.colors.muted }]}>Completed{completed[0]?.task.completedAt ? ` — ${new Date(completed[0].task.completedAt).toLocaleDateString()}` : ""}</Text>
-          {completed.map(({ row, task }) => <TaskRow key={task.id} taskId={task.id} commentary={row.commentary} />)}
-        </View>
-      ) : null}
-      {outstanding.length ? (
-        <View style={styles.taskGroup}>
-          <Text style={[styles.groupHeading, { color: theme.colors.muted }]}>Still outstanding</Text>
-          {outstanding.map(({ row, task }) => <TaskRow key={task.id} taskId={task.id} commentary={row.commentary} />)}
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  block: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
-  chip: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, alignSelf: "flex-start" },
-  message: { gap: 8 },
-  messageLine: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 4 },
-  taskList: { width: "100%", gap: 14, paddingVertical: 4 },
-  taskGroup: { gap: 4 },
-  groupHeading: { fontSize: 13, fontWeight: "600", marginBottom: 2 },
-  taskRow: { flexDirection: "row", alignItems: "flex-start", width: "100%", minHeight: 40 },
-  checkTarget: { width: 40, minHeight: 40, alignItems: "flex-start", justifyContent: "center", paddingLeft: 4 },
-  circle: { width: 20, height: 20, borderWidth: 1.5, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  taskCopy: { flex: 1, minWidth: 0, justifyContent: "center", minHeight: 40, paddingVertical: 6 },
+  chip: { borderRadius: 10, paddingHorizontal: 7, paddingVertical: 4, alignSelf: "flex-start" },
+  line: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", minHeight: 10, gap: 3 },
+  taskContainer: { width: "100%", paddingVertical: 4 },
+  taskRow: { flexDirection: "row", alignItems: "flex-start", width: "100%", minHeight: 48 },
+  checkTarget: { width: 40, minHeight: 48, alignItems: "center", justifyContent: "center" },
+  circle: {
+    width: 22,
+    height: 22,
+    borderWidth: 1.5,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  taskCopy: { flex: 1, minWidth: 0, justifyContent: "center", minHeight: 48, paddingVertical: 5 },
 });

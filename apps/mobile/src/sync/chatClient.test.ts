@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { PERSONAL_THREAD_ID } from "@yatma/core";
+import { localPlanningDay } from "../application/dailyStack";
 
 const mocks = vi.hoisted(() => ({
   loadOutboxEvents: vi.fn(),
@@ -71,6 +72,11 @@ describe("chat turn client", () => {
     expect(firstInput?.requestId).toBeTruthy();
     expect(firstInput?.messageId).toBeTruthy();
     expect(firstInput?.chatId).toBe(PERSONAL_THREAD_ID);
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+    expect(firstInput?.planning).toEqual({
+      date: localPlanningDay(new Date(), timezone),
+      timezone,
+    });
     releaseObservation();
     await expect(first).resolves.toEqual(receipt);
     await expect(findActiveChatTurn(receipt.chatId)).resolves.toBeNull();
@@ -102,17 +108,21 @@ describe("chat turn client", () => {
         ready: Promise.resolve(),
         completion: Promise.reject(new Error("socket closed")),
       }),
-      turnGet: vi.fn().mockResolvedValue({ receipt, resultText: "recovered", batches: [], error: null }),
+      turnGet: vi
+        .fn()
+        .mockResolvedValue({ receipt, resultText: "recovered", batches: [], error: null }),
     };
     mocks.getSyncEngine.mockReturnValue({ client });
     const items: unknown[] = [];
     const onError = vi.fn();
 
-    await expect(sendChatTurn({
-      projectId: null,
-      text: "hello",
-      handlers: { onItem: (item) => items.push(item), onError },
-    })).rejects.toThrow("socket closed");
+    await expect(
+      sendChatTurn({
+        projectId: null,
+        text: "hello",
+        handlers: { onItem: (item) => items.push(item), onError },
+      }),
+    ).rejects.toThrow("socket closed");
     expect(items).toEqual([{ kind: "started", chatId: "chat-1", turnId: receipt.turnId }]);
     expect(onError).toHaveBeenCalled();
     await expect(findActiveChatTurn(receipt.chatId)).resolves.toBe(receipt.turnId);
@@ -152,10 +162,12 @@ describe("chat turn client", () => {
     mocks.getSyncEngine.mockReturnValue({ client });
     const items: unknown[] = [];
 
-    await expect(resumeChatTurn({
-      chatId: receipt.chatId,
-      handlers: { onItem: (item) => items.push(item) },
-    })).resolves.toMatchObject({ receipt });
+    await expect(
+      resumeChatTurn({
+        chatId: receipt.chatId,
+        handlers: { onItem: (item) => items.push(item) },
+      }),
+    ).resolves.toMatchObject({ receipt });
 
     expect(items).toEqual([
       { kind: "started", chatId: receipt.chatId, turnId: receipt.turnId },
@@ -185,10 +197,12 @@ describe("chat turn client", () => {
     };
     mocks.getSyncEngine.mockReturnValue({ client });
 
-    await expect(resumeChatTurn({
-      chatId: receipt.chatId,
-      handlers: { onItem: () => {} },
-    })).rejects.toThrow("socket closed");
+    await expect(
+      resumeChatTurn({
+        chatId: receipt.chatId,
+        handlers: { onItem: () => {} },
+      }),
+    ).rejects.toThrow("socket closed");
     expect(client.turnObserve).toHaveBeenCalledWith(
       { turnId: receipt.turnId, after: 1 },
       expect.any(Function),

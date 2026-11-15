@@ -4,6 +4,7 @@ import { Link } from "expo-router";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { TaskMetadata } from "../task/TaskMetadata";
 import { useAppStore } from "../../state/atoms";
 import { selectProjectTasks } from "../../state/selectors";
 import { useTheme } from "../../theme/theme";
@@ -163,16 +164,18 @@ function ProjectTask(props: { readonly task: Task }) {
               </Text>
             </Pressable>
           </Link>
-          <Text
-            style={{
-              color: overdue ? theme.colors.danger : theme.colors.muted,
-              fontSize: 13,
-              marginTop: 3,
-            }}
-          >
-            {task.dueDate ? `${overdue ? "Overdue" : "Due"} ${task.dueDate}` : "No due date"}
-            {task.status === "in_progress" ? "  In progress" : ""}
-          </Text>
+          <TaskMetadata task={task} />
+          {task.dueDate ? (
+            <Text
+              style={{
+                color: overdue ? theme.colors.danger : theme.colors.muted,
+                fontSize: 13,
+                marginTop: 3,
+              }}
+            >
+              {overdue ? "Overdue" : "Due"} {task.dueDate}
+            </Text>
+          ) : null}
         </View>
         <IconButton
           name="calendar-outline"

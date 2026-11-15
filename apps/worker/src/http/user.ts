@@ -12,6 +12,7 @@ import type {
   TurnStopInput,
   TurnStopResult,
 } from "@yatma/core";
+import { supportsSyncEvents } from "@yatma/core";
 import { err, ok, type Result } from "neverthrow";
 
 type Principal = { readonly userId: string };
@@ -20,13 +21,28 @@ type Principal = { readonly userId: string };
 export interface UserApiContext {
   readonly pushEvents: (userId: string, input: SyncPushInput) => Promise<SyncPushResult>;
   readonly startTurn: (userId: string, input: TurnStartInput) => Promise<TurnReceipt>;
-  readonly getTurn: (userId: string, turnId: string) => Promise<TurnGetResult>;
+  readonly getTurn: (
+    userId: string,
+    turnId: string,
+    eventSchemaVersion?: number,
+  ) => Promise<TurnGetResult>;
   readonly stopTurn: (userId: string, input: TurnStopInput) => Promise<TurnStopResult>;
 }
 
-type SyncCodes = "unauthorized" | "invalid_event" | "clock_skew" | "event_conflict" | "service_unavailable";
-type TurnStartCodes = "unauthorized" | "invalid_request" | "budget_exceeded" | "service_unavailable";
-type TurnReadCodes = "unauthorized" | "not_found" | "service_unavailable";
+type SyncCodes =
+  | "unauthorized"
+  | "invalid_event"
+  | "clock_skew"
+  | "event_conflict"
+  | "upgrade_required"
+  | "service_unavailable";
+type TurnStartCodes =
+  | "unauthorized"
+  | "invalid_request"
+  | "upgrade_required"
+  | "budget_exceeded"
+  | "service_unavailable";
+type TurnReadCodes = "unauthorized" | "not_found" | "upgrade_required" | "service_unavailable";
 type TurnStopCodes = TurnReadCodes | "invalid_request";
 
 function failure<C extends string>(
@@ -53,41 +69,86 @@ function messageOf(error: unknown): string {
 function syncFailure(error: unknown): RailError<SyncCodes> {
   const tag = tagOf(error);
   const message = messageOf(error);
+  if (tag === "InvalidRequest" && message === "upgrade_required") {
+    return failure(
+      "upgrade_required",
+      "Update Yatma to sync this workspace.",
+      "Install a current build. Your unsent changes remain on this device.",
+    );
+  }
   if (tag === "ClockSkew") {
-    return failure("clock_skew", "The device clock is out of sync.", "Correct the device clock, then retry.");
+    return failure(
+      "clock_skew",
+      "The device clock is out of sync.",
+      "Correct the device clock, then retry.",
+    );
   }
   if (tag === "InvalidRequest" && message.includes("event_conflict")) {
-    return failure("event_conflict", "An event ID already exists with different content.", "Refresh the local state and contact support if the conflict continues.");
+    return failure(
+      "event_conflict",
+      "An event ID already exists with different content.",
+      "Refresh the local state and contact support if the conflict continues.",
+    );
   }
   if (tag === "InvalidRequest") {
-    return failure("invalid_event", "The event batch was rejected.", "Refresh local state and retry the edit.");
+    return failure(
+      "invalid_event",
+      "The event batch was rejected.",
+      "Refresh local state and retry the edit.",
+    );
   }
   if (tag === "RpcClientError") {
-    return failure("service_unavailable", "Sync is temporarily unavailable.", "Retry when the connection is available.", true);
+    return failure(
+      "service_unavailable",
+      "Sync is temporarily unavailable.",
+      "Retry when the connection is available.",
+      true,
+    );
   }
   throw new Error("sync handler failed");
 }
 
 function turnStartFailure(error: unknown): RailError<TurnStartCodes> {
   const tag = tagOf(error);
+  if (tag === "InvalidRequest" && messageOf(error) === "upgrade_required") return upgradeRequired();
   if (tag === "InvalidRequest") {
-    return failure("invalid_request", "The turn request conflicts with an existing request.", "Retry with a new request ID.");
+    return failure(
+      "invalid_request",
+      "The turn request conflicts with an existing request.",
+      "Retry with a new request ID.",
+    );
   }
   if (tag === "BudgetExceeded") {
-    return failure("budget_exceeded", "The daily model usage limit has been reached.", "Wait for the daily reset or reduce the request.");
+    return failure(
+      "budget_exceeded",
+      "The daily model usage limit has been reached.",
+      "Wait for the daily reset or reduce the request.",
+    );
   }
   if (tag === "RpcClientError") {
-    return failure("service_unavailable", "Turn service is temporarily unavailable.", "Retry with the same request ID.", true);
+    return failure(
+      "service_unavailable",
+      "Turn service is temporarily unavailable.",
+      "Retry with the same request ID.",
+      true,
+    );
   }
   throw new Error("turn start handler failed");
 }
 
 function turnReadFailure(error: unknown): RailError<TurnReadCodes> {
+  if (tagOf(error) === "InvalidRequest" && messageOf(error) === "upgrade_required")
+    return upgradeRequired();
   if (tagOf(error) === "NotFound") {
     return failure("not_found", "That turn could not be found.", "Refresh the chat and retry.");
   }
   if (tagOf(error) === "RpcClientError") {
-    return failure("service_unavailable", "Turn service is temporarily unavailable.", "Retry when the connection is available.", true);
+    return failure(
+      "service_unavailable",
+      "Turn service is temporarily unavailable.",
+      "Retry when the connection is available.",
+      true,
+    );
   }
   throw new Error("turn handler failed");
 }
@@ -107,41 +168,68 @@ function unauthorized<C extends string>(): RailError<C> {
   return failure("unauthorized" as C, "Sign in to use this operation.", "Sign in again and retry.");
 }
 
+function upgradeRequired(): RailError<"upgrade_required"> {
+  return failure(
+    "upgrade_required",
+    "Update Yatma to read this workspace.",
+    "Install a current build. Your unsent changes remain on this device.",
+  );
+}
+
 /** Mount authenticated unary JSON contracts beside the existing WebSocket RPC host. */
 export function createUserApi(principal: Principal | null) {
   const syncHandlers: Handlers<typeof syncContract, UserApiContext, Principal> = {
     pushEvents: ({ body, principal, context }) => {
       if (!principal) return err(unauthorized<SyncCodes>());
-      return invoke(
-        () => context.pushEvents(principal.userId, body),
-        syncFailure,
-      );
+      if (!supportsSyncEvents(body.eventSchemaVersion)) {
+        return err(
+          failure(
+            "upgrade_required",
+            "Update Yatma to sync this workspace.",
+            "Install a current build. Your unsent changes remain on this device.",
+          ),
+        );
+      }
+      return invoke(() => context.pushEvents(principal.userId, body), syncFailure);
     },
   };
   const turnHandlers: Handlers<typeof turnContract, UserApiContext, Principal> = {
     startTurn: ({ body, principal, context }) => {
       if (!principal) return err(unauthorized<TurnStartCodes>());
+      if (!supportsSyncEvents(body.eventSchemaVersion)) return err(upgradeRequired());
       return invoke(() => context.startTurn(principal.userId, body), turnStartFailure);
     },
-    getTurn: ({ params, principal, context }) => {
+    getTurn: ({ params, query, principal, context }) => {
       if (!principal) return err(unauthorized<TurnReadCodes>());
-      return invoke(() => context.getTurn(principal.userId, params.turnId), turnReadFailure);
+      const version =
+        query?.eventSchemaVersion === undefined ? undefined : Number(query.eventSchemaVersion);
+      if (!supportsSyncEvents(version)) return err(upgradeRequired());
+      return invoke(
+        () => context.getTurn(principal.userId, params.turnId, version),
+        turnReadFailure,
+      );
     },
     stopTurn: ({ params, body, principal, context }) => {
       if (!principal) return err(unauthorized<TurnStopCodes>());
       if (params.turnId !== body.turnId) {
-        return err(failure("invalid_request", "The turn ID in the path and body must match.", "Refresh the chat and retry."));
+        return err(
+          failure(
+            "invalid_request",
+            "The turn ID in the path and body must match.",
+            "Refresh the chat and retry.",
+          ),
+        );
       }
       return invoke(() => context.stopTurn(principal.userId, body), turnReadFailure);
     },
   };
   const syncPolicy = definePolicy<typeof syncContract, Principal>(syncContract, {
-    verify: () => principal ? ok(principal) : err(unauthorized<"unauthorized">()),
+    verify: () => (principal ? ok(principal) : err(unauthorized<"unauthorized">())),
     operations: { pushEvents: () => ok(undefined) },
     disclosure: () => "public",
   });
   const turnPolicy = definePolicy<typeof turnContract, Principal>(turnContract, {
-    verify: () => principal ? ok(principal) : err(unauthorized<"unauthorized">()),
+    verify: () => (principal ? ok(principal) : err(unauthorized<"unauthorized">())),
     operations: {
       startTurn: () => ok(undefined),
       getTurn: () => ok(undefined),

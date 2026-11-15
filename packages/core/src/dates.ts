@@ -20,3 +20,14 @@ export function addCalendarDays(day: string, amount: number): string {
   date.setUTCDate(date.getUTCDate() + amount);
   return date.toISOString().slice(0, 10);
 }
+
+export type SchedulePreset = "today" | "this_week" | "next_week" | "later";
+
+/** Monday-based weeks: this week's Sunday, next week's Monday; Later is unscheduled. */
+export function scheduledDateForPreset(today: string, preset: SchedulePreset): string | null {
+  if (preset === "later") return null;
+  if (preset === "today") return today;
+  const weekday = new Date(`${today}T12:00:00.000Z`).getUTCDay();
+  const untilSunday = (7 - weekday) % 7;
+  return addCalendarDays(today, preset === "this_week" ? untilSunday : untilSunday + 1);
+}
